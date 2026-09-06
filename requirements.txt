@@ -1,0 +1,12 @@
+torch
+torchaudio
+speechbrain
+numpy
+scikit-learn
+matplotlib
+soundfile
+streamlit
+vosk
+fastapi
+uvicorn[standard]
+python-multipart
