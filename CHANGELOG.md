@@ -10,6 +10,24 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.2c.2: Persistent User-to-Speaker Authorization Enforcement**
+  - Implemented `UserSpeakerRepository` in `app/repositories/user_speaker_repository.py` using SQLAlchemy 2.0:
+    - Encapsulates database operations for `UserSpeakerMapping`: `create()`, `get_by_firebase_uid()`, `get_speaker_id_for_user()`, `get_by_speaker_id()`, `get_or_raise()`, `delete_by_firebase_uid()`, `delete_by_speaker_id()`, `list_mappings()`, and `count()`.
+    - Enforces 1-to-1 uniqueness and foreign keys, raising `DuplicateUserMappingError` and `UserMappingNotFoundError`.
+    - Re-exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+    - Added dedicated unit test suite `tests/test_user_speaker_repository.py` with 10 tests covering CRUD, lookups, 1-to-1 uniqueness, pagination, and cascade deletion.
+  - Refactored `resolve_user_voice_identity()` and `check_verification_authorization()` in `app/core/device_auth.py`:
+    - Queries persistent `user_speaker_mappings` table using verified Firebase UID.
+    - Completely eliminates client-controlled fallback paths (no reliance on `user.voice_identity`, email prefixes, or raw UIDs).
+    - Rejects unmapped users with HTTP 403 Forbidden.
+    - Rejects users attempting to verify another speaker's voiceprint with HTTP 403 Forbidden.
+    - Fails closed on database lookup errors with sanitized HTTP 500 (`Database authorization service unavailable.`).
+    - Preserves explicit server-side administrator policy and hardware IoT device authentication.
+  - Integrated database session dependency (`get_db`) across `/verify` (`routes_verification.py`) and `/challenge` (`routes_challenges.py`).
+  - Enforced that verification authorization rejection occurs *before* saving audio to disk or allocating ML inference slots.
+  - Added dedicated security test suite `tests/test_persistent_auth.py` covering all 9 required verification and edge case flows.
+  - Test suite expanded from 121 to 140 passing automated tests.
+
 - **Milestone 3C.2c.1: Persistent User-to-Speaker Identity Mapping Schema and Migration**
   - Implemented `UserSpeakerMapping` entity in `app/db/base.py` mapping to `user_speaker_mappings`:
     - Columns: `id` (PK), `firebase_uid` (String(128), unique, indexed, non-null), `speaker_id` (String(64), unique, indexed, non-null, ForeignKey referencing `speakers.speaker_id` ON DELETE CASCADE), `assigned_by` (String(128)), UTC timestamps (`created_at`, `updated_at`), and `metadata_json`.

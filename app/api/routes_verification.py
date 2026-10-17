@@ -12,10 +12,12 @@ from typing import Optional, Union
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import soundfile as sf
+from sqlalchemy.orm import Session
 
 from app.core.config import SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES
 from app.core.auth import AuthenticatedUser, get_current_user, get_current_admin, authenticate_ws_admin
 from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
+from app.db.session import get_db
 from app.core.rate_limit import (
     _verify_limiter,
     _identify_limiter,
@@ -142,6 +144,7 @@ async def verify(
     session_id: Optional[str] = Form(None, description="Active verification session ID"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
     actor: Union[AuthenticatedUser, AuthenticatedDevice] = Depends(get_current_actor),
+    db: Session = Depends(get_db),
 ):
     """
     Verify whether the audio matches the claimed speaker identity (1-to-1)
@@ -150,7 +153,7 @@ async def verify(
     
     Security workflow:
     1. Validates registration of claimed identity.
-    2. Enforces caller authorization (Correction B: ordinary users can only verify their own voice identity).
+    2. Enforces caller authorization (persistent database-backed UserSpeakerMapping).
     3. Enforces rate limits per verified actor.
     4. Enforces presence of challenge_id and session_id.
     5. Atomically consumes the challenge (Single-Attempt Invalidation) BEFORE audio processing.
@@ -172,8 +175,8 @@ async def verify(
             detail=f"Speaker '{claimed_identity}' is not registered."
         )
 
-    # Caller authorization: Ordinary users can only verify their own voice identity
-    check_verification_authorization(actor, claimed_identity)
+    # Caller authorization: Ordinary users can only verify their bound voice identity
+    check_verification_authorization(actor, claimed_identity, session=db)
 
     # 1. Challenge & Session binding validation
     if not challenge_id or not str(challenge_id).strip() or not session_id or not str(session_id).strip():

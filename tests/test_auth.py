@@ -47,6 +47,10 @@ from app.core.auth import (
 )
 from app.core.auth_policy import Role
 from app.core.rate_limit import _challenge_limiter, _verify_limiter, _identify_limiter
+from app.db.base import Base, SpeakerRecord, UserSpeakerMapping
+from app.db.session import get_engine, get_db_context
+from app.repositories.speaker_repository import SpeakerRepository
+from app.repositories.user_speaker_repository import UserSpeakerRepository
 import liveness
 
 client = TestClient(app)
@@ -130,18 +134,42 @@ def deterministic_test_verifier(token: str, check_revoked: bool = False) -> dict
 
 @pytest.fixture(autouse=True)
 def setup_test_auth():
-    """Configure deterministic verifier and clear dependency overrides for dedicated auth tests."""
+    """Configure deterministic verifier, clear dependency overrides, and seed test database."""
     app.dependency_overrides.clear()
     _challenge_limiter.reset_for_testing()
     _verify_limiter.reset_for_testing()
     _identify_limiter.reset_for_testing()
     set_test_token_verifier(deterministic_test_verifier)
+
+    # Ensure tables exist
+    Base.metadata.create_all(get_engine())
+
+    with get_db_context() as session:
+        session.query(UserSpeakerMapping).delete()
+        session.query(SpeakerRecord).delete()
+        session.flush()
+
+        spk_repo = SpeakerRepository(session)
+        usr_repo = UserSpeakerRepository(session)
+
+        spk_repo.create(speaker_id="Zubair", full_name="Zubair Pathan")
+        spk_repo.create(speaker_id="Alice", full_name="Alice Smith")
+
+        usr_repo.create(firebase_uid="user-uid-002", speaker_id="Zubair")
+        usr_repo.create(firebase_uid="other-uid-999", speaker_id="Alice")
+
     yield
+
+    with get_db_context() as session:
+        session.query(UserSpeakerMapping).delete()
+        session.query(SpeakerRecord).delete()
+
     set_test_token_verifier(None)
     app.dependency_overrides.clear()
     _challenge_limiter.reset_for_testing()
     _verify_limiter.reset_for_testing()
     _identify_limiter.reset_for_testing()
+
 
 
 # ─── 1. Health Discovery (Public) ─────────────────────────────────────────────

@@ -1,14 +1,15 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.2c.1 — Persistent User-to-Speaker Identity Mapping Schema & Migration (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `ea37294`, working tree updated with 3C.2c.1 implementation)  
-**Application Run Status:** Fully Operational (All 121 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3C.2c.2 — Persistent User-to-Speaker Authorization Enforcement (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation`  
+**Application Run Status:** Fully Operational (All 140 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.2c.1 establishes the persistent database schema and migration infrastructure for mapping authenticated application users (Firebase UID) to enrolled biometric speaker identities (`speakers.speaker_id`). Implemented via `UserSpeakerMapping` in `app/db/base.py`, the design enforces a strict 1-to-1 cardinality via unique indexes on both `firebase_uid` and `speaker_id`, coupled with cascading foreign key referential integrity (`ForeignKey("speakers.speaker_id", ondelete="CASCADE")`). This guarantees identity non-repudiation: a physical voiceprint cannot be shared across multiple user accounts (eliminating audit ambiguity), and an ordinary user cannot verify against multiple voiceprints. The schema strictly excludes credentials, tokens, and biometric raw data. Alembic migration `0b98eaf9dc3e_create_user_speaker_mappings_table.py` was created and validated with end-to-end upgrade, foreign key verification, 1-to-1 uniqueness rejection, and single-revision rollback against disposable SQLite databases. The automated test suite has expanded to 121 tests passing in 2.77s with zero regressions. Authorization enforcement is deliberately preserved for Milestone 3C.2c.2.
+Milestone 3C.2c.2 completes the enforcement of persistent, database-backed authorization for biometric verification. Ordinary authenticated web users are strictly restricted to verifying only the specific enrolled speaker identity bound to their Firebase UID in the `user_speaker_mappings` table. In accordance with zero-trust principles, client-supplied UIDs, roles, email prefixes, or custom claims are never accepted as proof of identity. If a user has no mapping or attempts to verify an arbitrary speaker, the request is rejected with HTTP 403 Forbidden *before* audio persistence and *before* ML inference slots are acquired. Database lookup errors fail closed with a sanitized HTTP 500 without leaking internals. Explicit server-side administrative policies and hardware IoT device authentication remain fully decoupled and functional. The automated test suite has expanded to 140 passing tests with zero regressions.
+
 
 ---
 
@@ -249,14 +250,54 @@ Milestone 3C.2c.1 establishes the persistent database schema and migration infra
     - Verifies re-application of `upgrade head`.
   - Total automated tests expanded to 121 passing tests in 2.77s.
 
+### Milestone 3C.2c.2: Persistent User-to-Speaker Authorization Enforcement (Completed)
+- **UserSpeakerRepository (`app/repositories/user_speaker_repository.py`):**
+  - Built dedicated repository encapsulating persistence and queries on `user_speaker_mappings`:
+    - `create()`: Maps user to speaker; validates inputs; enforces 1-to-1 uniqueness and foreign keys via `DuplicateUserMappingError`.
+    - `get_by_firebase_uid()`: Retrieves mapping by Firebase UID.
+    - `get_speaker_id_for_user()`: Fast scalar query returning bound `speaker_id`.
+    - `get_by_speaker_id()`: Retrieves mapping by speaker ID.
+    - `get_or_raise()`: Resolves mapping or raises `UserMappingNotFoundError`.
+    - `delete_by_firebase_uid()` / `delete_by_speaker_id()`: Clean removal.
+    - `list_mappings()` and `count()`: Pagination and record aggregation.
+  - Re-exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+  - Added 10 unit tests in `tests/test_user_speaker_repository.py`.
+- **Database-Backed Identity Resolution & Authorization (`app/core/device_auth.py`):**
+  - Refactored `resolve_user_voice_identity()` to query `UserSpeakerMapping` in the database where `firebase_uid == user.uid`.
+  - Removed client-controlled fallback heuristics (no reliance on `user.voice_identity`, email prefix, or raw `user.uid`).
+  - Refactored `check_verification_authorization()`:
+    - Admin: Authorized for any registered speaker under explicit server policy.
+    - Device: Authorized for any registered speaker at this physical portal.
+    - Ordinary User: Authorized ONLY if mapped in `user_speaker_mappings` to the claimed speaker.
+    - Unmapped users are rejected with HTTP 403 Forbidden.
+    - Users attempting another speaker's identity are rejected with HTTP 403 Forbidden.
+    - Database lookup errors fail closed with HTTP 500 (`Database authorization service unavailable.`).
+- **Endpoint Pipeline Integration:**
+  - `POST /verify` (`app/api/routes_verification.py`): Injects `db: Session = Depends(get_db)` and validates authorization *before* audio persistence and ML inference.
+  - `POST /challenge` (`app/api/routes_challenges.py`): Injects `db: Session = Depends(get_db)` and validates/resolves user-speaker identity binding.
+- **Dedicated Security Test Suite (`tests/test_persistent_auth.py`):**
+  - Added 9 targeted tests covering:
+    1. Mapped user verifying own identity.
+    2. Unmapped user denied.
+    3. User attempting different speaker identity denied.
+    4. Client-supplied UID or role cannot override verified principal.
+    5. Admin allowed according to explicit policy.
+    6. Database lookup failure denies access (Fail closed).
+    7. Authorization rejection happens before audio persistence and ML inference.
+    8. Existing device-auth behavior remains correct.
+    9. Existing challenge and verification behavior does not regress.
+  - Total automated tests expanded to 140 passing tests in 2.74s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **121/121 tests PASSED in 2.77s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 15 Database + 12 Speaker Repository) |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **15/15 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema & rollback) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **140/140 tests PASSED in 2.74s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 15 Database + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** (mapped, unmapped, mismatch, tamper, admin, fail-closed, pre-inference, device, regression) |
+| **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** (CRUD, scalar queries, 1-to-1 uniqueness, cascade delete) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, active filters, validation, duplicate rejection, rollback) |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **15/15 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema & rollback) |
 | **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
@@ -283,12 +324,13 @@ Milestone 3C.2c.1 establishes the persistent database schema and migration infra
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.2c.2: Persistent Authorization Enforcement**:
-1. Implement database-backed user identity resolution querying `UserSpeakerMapping` in `app/core/device_auth.py` / `check_verification_authorization`.
-2. Enforce that ordinary web users can verify only their bound speaker identity resolved from the database mapping.
-3. Ensure administrative users can verify any speaker identity via established administrative policies.
-4. Add authorization and regression tests covering mapped users, unmapped users, mismatched claimed identities, and admin overrides.
-5. Push completed 3C.2c.2 increment to `feature/enterprise-foundation` before proceeding to Milestone 3C.3.
+Proceed to **Milestone 3C.3: Device Registry Schema & Persistent Device Authentication**:
+1. Implement `DeviceRecord` schema and Alembic migration for hardware access terminals (storing device ID, hashed credentials, location, and lifecycle status).
+2. Create `DeviceRepository` with caller-controlled transactions.
+3. Replace hardcoded/environment device registry with database-backed authentication.
+4. Add migration, rollback, and repository tests against disposable databases.
+5. Push completed 3C.3 increment to `feature/enterprise-foundation`.
+
 
 
 

@@ -9,6 +9,12 @@ from app.repositories.speaker_repository import (
     DuplicateSpeakerError,
     SpeakerNotFoundError,
 )
+from app.repositories.user_speaker_repository import (
+    UserSpeakerRepository,
+    UserSpeakerRepositoryError,
+    DuplicateUserMappingError,
+    UserMappingNotFoundError,
+)
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -30,6 +36,10 @@ __all__ = [
     "SpeakerRepositoryError",
     "DuplicateSpeakerError",
     "SpeakerNotFoundError",
+    "UserSpeakerRepository",
+    "UserSpeakerRepositoryError",
+    "DuplicateUserMappingError",
+    "UserMappingNotFoundError",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",

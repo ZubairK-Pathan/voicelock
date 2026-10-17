@@ -8,10 +8,21 @@ from app.repositories.speaker_repository import (
     DuplicateSpeakerError,
     SpeakerNotFoundError,
 )
+from app.repositories.user_speaker_repository import (
+    UserSpeakerRepository,
+    UserSpeakerRepositoryError,
+    DuplicateUserMappingError,
+    UserMappingNotFoundError,
+)
 
 __all__ = [
     "SpeakerRepository",
     "SpeakerRepositoryError",
     "DuplicateSpeakerError",
     "SpeakerNotFoundError",
+    "UserSpeakerRepository",
+    "UserSpeakerRepositoryError",
+    "DuplicateUserMappingError",
+    "UserMappingNotFoundError",
 ]
+

@@ -5,15 +5,23 @@ app/api/routes_challenges.py — Stateful liveness challenge generation endpoint
 import sys
 from typing import Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 from app.schemas.challenge import ChallengeResponse
 from app.services.challenge_service import challenge_display
 import app.services.challenge_service as challenge_service
 import app.services.speaker_service as speaker_service
 from app.core.config import DEFAULT_CHALLENGE_TTL_SECONDS, DEFAULT_CHALLENGE_LENGTH
-from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
+from app.core.auth import AuthenticatedUser
+from app.core.device_auth import (
+    get_current_actor,
+    check_verification_authorization,
+    resolve_user_voice_identity,
+    AuthenticatedDevice,
+)
 from app.core.rate_limit import _challenge_limiter, get_actor_rate_key, enforce_rate_limit
 from app.core.middleware import PayloadTooLargeError
+from app.db.session import get_db
 
 router = APIRouter(tags=["Liveness"])
 
@@ -36,6 +44,7 @@ def _get_challenge_store():
 async def create_challenge(
     request: Request,
     actor: Union[AuthenticatedUser, AuthenticatedDevice] = Depends(get_current_actor),
+    db: Session = Depends(get_db),
 ):
     """
     Generate an unpredictable, cryptographically secure 3-digit liveness challenge.
@@ -80,9 +89,18 @@ async def create_challenge(
                 status_code=404,
                 detail=f"Speaker '{clean_claimed}' is not registered."
             )
-        # Ordinary users can only challenge their own voice identity
-        check_verification_authorization(actor, clean_claimed)
+        # Ordinary users can only challenge their bound voice identity
+        check_verification_authorization(actor, clean_claimed, session=db)
         claimed_identity = clean_claimed
+    elif isinstance(actor, AuthenticatedUser) and not actor.is_admin:
+        # If ordinary user didn't supply claimed_identity, resolve their bound identity
+        mapped_speaker = resolve_user_voice_identity(actor, session=db)
+        if not mapped_speaker:
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: User account is not mapped to an enrolled speaker identity.",
+            )
+        claimed_identity = mapped_speaker
 
     store = _get_challenge_store()
     challenge = store.create_challenge(

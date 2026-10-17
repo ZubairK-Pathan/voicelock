@@ -24,12 +24,14 @@ Threat Model & Security Design:
 
 import hashlib
 import hmac
+import logging
 import os
 import threading
 import time
 from typing import Optional, Union, Dict, Tuple
 from pydantic import BaseModel, Field
 from fastapi import HTTPException, Request, Depends
+from sqlalchemy.orm import Session
 
 from app.core.config import (
     VOICELOCK_ENV,
@@ -39,6 +41,11 @@ from app.core.config import (
 )
 from app.core.auth_policy import Role
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.db.session import get_db_context
+from app.repositories.user_speaker_repository import UserSpeakerRepository
+
+logger = logging.getLogger(__name__)
+
 
 
 # ─── Authenticated Device Domain Model ────────────────────────────────────────
@@ -302,32 +309,59 @@ async def get_current_actor(request: Request) -> Union[AuthenticatedUser, Authen
     )
 
 
-def resolve_user_voice_identity(user: AuthenticatedUser) -> Optional[str]:
+def resolve_user_voice_identity(
+    user: AuthenticatedUser,
+    session: Optional[Session] = None,
+) -> Optional[str]:
     """
-    Derive the voiceprint speaker identity authorized for an ordinary web user.
-    1. If the user has an explicit voice_identity attribute/claim, use that.
-    2. Otherwise derive from email prefix (e.g. "zubair@voicelock.com" -> "zubair").
-    3. Fallback to user.uid.
+    Resolve the permitted biometric speaker_id for an authenticated user from the database.
+    Queries the persistent UserSpeakerMapping table using the user's verified Firebase UID.
+    Never trusts client-supplied claims, email heuristics, or fallback tricks.
+    Fails closed on database lookup errors.
     """
-    if user.voice_identity and user.voice_identity.strip():
-        return user.voice_identity.strip()
-    if user.email:
-        prefix = user.email.split("@")[0].strip()
-        return prefix
-    return user.uid
+    if not user or not user.uid:
+        return None
+
+    clean_uid = user.uid.strip()
+
+    def _query(s: Session) -> Optional[str]:
+        repo = UserSpeakerRepository(s)
+        return repo.get_speaker_id_for_user(clean_uid)
+
+    try:
+        if session is not None:
+            return _query(session)
+        else:
+            with get_db_context() as db:
+                return _query(db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Database lookup error during user voice identity resolution: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Database authorization service unavailable.",
+        ) from exc
 
 
 def check_verification_authorization(
     actor: Union[AuthenticatedUser, AuthenticatedDevice],
     claimed_identity: str,
+    session: Optional[Session] = None,
 ) -> None:
     """
-    Enforce Reviewer Point B:
-    - Admin: Authorized to challenge/verify any registered identity.
+    Enforce persistent verification authorization:
+    - Admin: Authorized to challenge/verify any registered identity (preserve explicit admin policy).
     - Device: Authorized to initiate verification for any registered speaker at this physical portal.
-    - Ordinary User: Authorized ONLY to verify their own voice identity!
+    - Ordinary User: Authorized ONLY if mapped in UserSpeakerMapping to the claimed speaker identity!
+      - If unmapped: Denied (HTTP 403 Forbidden).
+      - If mapped to a different speaker: Denied (HTTP 403 Forbidden).
+      - On database lookup error: Fails closed (HTTP 500).
     """
     clean_claimed = claimed_identity.strip()
+    if not clean_claimed:
+        raise HTTPException(status_code=400, detail="Claimed identity must be a non-empty string.")
+
     if actor.is_admin:
         return
 
@@ -336,9 +370,18 @@ def check_verification_authorization(
         return
 
     if isinstance(actor, AuthenticatedUser):
-        user_identity = resolve_user_voice_identity(actor)
-        if not user_identity or user_identity.lower() != clean_claimed.lower():
+        mapped_speaker = resolve_user_voice_identity(actor, session=session)
+        if not mapped_speaker:
             raise HTTPException(
                 status_code=403,
-                detail=f"Forbidden: You are only authorized to verify your own voice identity. Ordinary users cannot verify arbitrary identities ('{clean_claimed}').",
+                detail="Forbidden: User account is not mapped to an enrolled speaker identity.",
             )
+        if mapped_speaker.lower() != clean_claimed.lower():
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: You are only authorized to verify your own voice identity ('{mapped_speaker}'). Ordinary users cannot verify arbitrary identities ('{clean_claimed}').",
+            )
+        return
+
+    raise HTTPException(status_code=403, detail="Forbidden: Unrecognized principal type.")
+
