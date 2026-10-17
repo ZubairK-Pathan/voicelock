@@ -45,6 +45,13 @@ import uvicorn
 
 from predict import predict_speaker, verify_speaker, DEFAULT_THRESHOLD
 from audio_utils import load_embedding_model, load_profiles
+from liveness import (
+    default_challenge_store,
+    challenge_display,
+    run_liveness_check,
+    LivenessChallenge,
+    BaseChallengeStore,
+)
 
 # ─── Configuration & Security Defaults ───────────────────────────────────────
 
@@ -249,16 +256,82 @@ async def identify(
                 pass
 
 
+@app.post("/challenge")
+async def create_challenge_endpoint(request: Request):
+    """
+    Generate an unpredictable, cryptographically secure 3-digit liveness challenge.
+    Binds the challenge to a verification session and optionally to a claimed identity.
+    Expires in 60 seconds.
+    """
+    claimed_identity = None
+    session_id = None
+
+    # Support both application/json and form-encoded requests
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                claimed_identity = body.get("claimed_identity")
+                session_id = body.get("session_id")
+        except Exception:
+            pass
+    else:
+        try:
+            form = await request.form()
+            claimed_identity = form.get("claimed_identity")
+            session_id = form.get("session_id")
+        except Exception:
+            pass
+
+    profiles, _ = get_system()
+    if claimed_identity is not None:
+        clean_claimed = str(claimed_identity).strip()
+        if profiles and clean_claimed not in profiles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Speaker '{clean_claimed}' is not registered."
+            )
+        claimed_identity = clean_claimed
+
+    challenge = default_challenge_store.create_challenge(
+        session_id=str(session_id).strip() if session_id else None,
+        claimed_identity=claimed_identity,
+        ttl_seconds=60,
+        length=3,
+    )
+
+    return {
+        "challenge_id": challenge.challenge_id,
+        "session_id": challenge.session_id,
+        "claimed_identity": challenge.claimed_identity,
+        "digits": challenge.digits,
+        "display": challenge_display(challenge.digits),
+        "expires_at": challenge.expires_at,
+        "expires_in_seconds": 60,
+    }
+
+
 @app.post("/verify")
 async def verify(
     request: Request,
-    audio: UploadFile = File(..., description="WAV/MP3/M4A audio file"),
+    audio: UploadFile = File(..., description="WAV/MP3/M4A audio file containing spoken challenge digits"),
     claimed_identity: str = Form(..., description="Name of the speaker being claimed"),
+    challenge_id: Optional[str] = Form(None, description="Active liveness challenge ID"),
+    session_id: Optional[str] = Form(None, description="Active verification session ID"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
 ):
     """
-    Verify whether the audio matches the claimed speaker identity (1-to-1).
-    Enforces server-side threshold and bounded upload limits.
+    Verify whether the audio matches the claimed speaker identity (1-to-1)
+    AND satisfies the bound liveness challenge (anti-spoofing / anti-replay).
+    
+    Security workflow:
+    1. Validates registration of claimed identity.
+    2. Enforces presence of challenge_id and session_id.
+    3. Atomically consumes the challenge (Single-Attempt Invalidation).
+    4. Evaluates spoken digits against expected challenge via offline Vosk STT.
+    5. If liveness fails, access is DENIED immediately without running ML inference.
+    6. If liveness passes, runs ECAPA-TDNN speaker verification at SERVER_THRESHOLD.
     """
     profiles, classifier = get_system()
     if not profiles:
@@ -271,8 +344,44 @@ async def verify(
             detail=f"Speaker '{claimed_identity}' is not registered."
         )
 
+    # 1. Challenge & Session binding validation
+    if not challenge_id or not str(challenge_id).strip() or not session_id or not str(session_id).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required challenge_id or session_id for verification."
+        )
+
+    clean_challenge_id = str(challenge_id).strip()
+    clean_session_id = str(session_id).strip()
+
+    # 2. Save upload and enforce upload limits
     tmp_path = save_upload(audio, request=request)
+
     try:
+        # 3. Atomically consume challenge (burn on use)
+        valid, reason, challenge = default_challenge_store.validate_and_consume(
+            challenge_id=clean_challenge_id,
+            session_id=clean_session_id,
+            claimed_identity=claimed_identity,
+        )
+        if not valid or challenge is None:
+            raise HTTPException(status_code=400, detail=reason)
+
+        # 4. Spoken liveness verification (Vosk STT challenge evaluation)
+        is_live, liveness_reason, _ = run_liveness_check(str(tmp_path), challenge.digits)
+        if not is_live:
+            # Liveness failure: Fail closed and deny access without running biometric inference
+            return {
+                "accepted": False,
+                "action": "DENY",
+                "claimed_identity": claimed_identity,
+                "similarity": 0.0,
+                "threshold_used": SERVER_THRESHOLD,
+                "liveness_passed": False,
+                "reason": f"Liveness check failed: {liveness_reason}",
+            }
+
+        # 5. Biometric speaker verification (SpeechBrain ECAPA-TDNN)
         result = verify_speaker(
             audio_path=str(tmp_path),
             claimed_identity=claimed_identity,
@@ -283,10 +392,11 @@ async def verify(
         )
         return {
             "accepted": result["is_accepted"],
+            "action": "UNLOCK" if result["is_accepted"] else "DENY",
             "claimed_identity": claimed_identity,
             "similarity": round(result["similarity"], 4),
             "threshold_used": SERVER_THRESHOLD,
-            "action": "UNLOCK" if result["is_accepted"] else "DENY",
+            "liveness_passed": True,
         }
     except HTTPException:
         raise

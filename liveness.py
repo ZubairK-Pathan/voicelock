@@ -20,14 +20,19 @@ Dependencies:
 Uses the small English model — fast, offline, no API key required.
 """
 
+import enum
 import json
-import random
+import secrets
 import struct
-import wave
+import threading
+import time
 import urllib.request
+import wave
 import zipfile
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 DIGIT_WORDS = {
     "0": ["zero", "oh"],
@@ -86,17 +91,211 @@ def _get_model():
     return _vosk_model
 
 
+# ─── Challenge Data Structures & Storage Interface ───────────────────────────
+
+class ChallengeStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CONSUMED = "CONSUMED"
+    EXPIRED = "EXPIRED"
+
+
+@dataclass
+class LivenessChallenge:
+    """
+    Representation of an active or consumed biometric liveness challenge.
+    
+    Attributes:
+        challenge_id: Cryptographically unpredictable unique identifier.
+        session_id: Client verification session to which the challenge is bound.
+        digits: The random sequence of digits the user must speak.
+        created_at: Epoch timestamp of challenge generation.
+        expires_at: Epoch timestamp when the challenge expires.
+        claimed_identity: Optional claimed speaker name bound to this challenge.
+        status: Current lifecycle status (PENDING, CONSUMED, EXPIRED).
+    """
+    challenge_id: str
+    session_id: str
+    digits: list[str]
+    created_at: float
+    expires_at: float
+    claimed_identity: Optional[str] = None
+    status: ChallengeStatus = ChallengeStatus.PENDING
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == ChallengeStatus.PENDING
+
+    @property
+    def display_text(self) -> str:
+        return "   ".join(self.digits)
+
+    def is_expired(self, current_time: float) -> bool:
+        return current_time > self.expires_at
+
+
+class BaseChallengeStore(ABC):
+    """
+    Abstract interface for managing the liveness challenge lifecycle.
+    Decouples storage from API logic, allowing in-memory prototypes to be replaced
+    with distributed stores (e.g., Redis or PostgreSQL challenge tables) in production.
+    """
+
+    @abstractmethod
+    def create_challenge(
+        self,
+        session_id: Optional[str] = None,
+        claimed_identity: Optional[str] = None,
+        ttl_seconds: int = 60,
+        length: int = 3,
+    ) -> LivenessChallenge:
+        """Generate and store a new challenge bound to a session."""
+        pass
+
+    @abstractmethod
+    def get_challenge(self, challenge_id: str) -> Optional[LivenessChallenge]:
+        """Retrieve a challenge by ID without mutating its lifecycle status."""
+        pass
+
+    @abstractmethod
+    def validate_and_consume(
+        self,
+        challenge_id: str,
+        session_id: str,
+        claimed_identity: Optional[str] = None,
+    ) -> tuple[bool, str, Optional[LivenessChallenge]]:
+        """
+        Atomically validate and consume a challenge.
+        Enforces single-attempt invalidation ('burn-on-use'): if the challenge is
+        pending, not expired, and matches session and identity, it is immediately
+        marked CONSUMED under a concurrency lock.
+        
+        Returns:
+            (success, failure_reason, challenge_object)
+        """
+        pass
+
+    @abstractmethod
+    def cleanup_expired(self) -> int:
+        """Purge expired and consumed challenges; returns count of removed items."""
+        pass
+
+
+class InMemoryChallengeStore(BaseChallengeStore):
+    """
+    Thread-safe in-memory challenge store for single-process development.
+
+    Architectural Limitations & Production Considerations:
+    1. Scope: State is local to the current Python process.
+    2. Multi-Worker / Distributed Incompatibility: If Uvicorn runs with multiple
+       workers (`--workers > 1`) or if multiple server instances run behind a
+       load balancer, in-memory challenge state will not be shared across processes.
+    3. Production Target: In multi-worker production deployments, replace this
+       implementation with a distributed Redis or PostgreSQL challenge store
+       conforming to BaseChallengeStore.
+    """
+
+    def __init__(self, time_func: Callable[[], float] = time.time):
+        self._challenges: dict[str, LivenessChallenge] = {}
+        self._lock = threading.Lock()
+        self._time_func = time_func
+
+    def create_challenge(
+        self,
+        session_id: Optional[str] = None,
+        claimed_identity: Optional[str] = None,
+        ttl_seconds: int = 60,
+        length: int = 3,
+    ) -> LivenessChallenge:
+        digits = generate_challenge(length)
+        challenge_id = f"ch_{secrets.token_hex(16)}"
+        clean_session = str(session_id).strip() if session_id else f"sess_{secrets.token_hex(16)}"
+        clean_claimed = str(claimed_identity).strip() if claimed_identity else None
+
+        now = self._time_func()
+        challenge = LivenessChallenge(
+            challenge_id=challenge_id,
+            session_id=clean_session,
+            digits=digits,
+            created_at=now,
+            expires_at=now + ttl_seconds,
+            claimed_identity=clean_claimed,
+            status=ChallengeStatus.PENDING,
+        )
+
+        with self._lock:
+            self._challenges[challenge_id] = challenge
+
+        return challenge
+
+    def get_challenge(self, challenge_id: str) -> Optional[LivenessChallenge]:
+        with self._lock:
+            return self._challenges.get(challenge_id)
+
+    def validate_and_consume(
+        self,
+        challenge_id: str,
+        session_id: str,
+        claimed_identity: Optional[str] = None,
+    ) -> tuple[bool, str, Optional[LivenessChallenge]]:
+        """
+        Atomically inspect and consume the challenge.
+        Applies Single-Attempt Invalidation: any valid PENDING challenge is marked
+        CONSUMED immediately to prevent replay and race conditions.
+        """
+        now = self._time_func()
+        with self._lock:
+            challenge = self._challenges.get(challenge_id)
+            if challenge is None:
+                return False, "Invalid or unknown challenge ID.", None
+
+            if challenge.status == ChallengeStatus.CONSUMED:
+                return False, "Challenge has already been consumed or invalidated.", None
+
+            if challenge.is_expired(now) or challenge.status == ChallengeStatus.EXPIRED:
+                challenge.status = ChallengeStatus.EXPIRED
+                return False, "Challenge has expired.", None
+
+            if challenge.session_id != str(session_id).strip():
+                return False, "Session mismatch for this challenge.", None
+
+            if challenge.claimed_identity is not None:
+                clean_claimed = str(claimed_identity).strip() if claimed_identity else ""
+                if challenge.claimed_identity != clean_claimed:
+                    return False, f"Challenge is bound to speaker '{challenge.claimed_identity}', not '{clean_claimed}'.", None
+
+            # Atomically burn on use
+            challenge.status = ChallengeStatus.CONSUMED
+            return True, "Challenge successfully validated and consumed.", challenge
+
+    def cleanup_expired(self) -> int:
+        now = self._time_func()
+        with self._lock:
+            to_remove = [
+                cid for cid, ch in self._challenges.items()
+                if ch.is_expired(now) or ch.status in (ChallengeStatus.EXPIRED, ChallengeStatus.CONSUMED)
+            ]
+            for cid in to_remove:
+                del self._challenges[cid]
+            return len(to_remove)
+
+
+default_challenge_store = InMemoryChallengeStore()
+
+
+# ─── Digit Generation & Presentation Utilities ────────────────────────────────
+
 def generate_challenge(length: int = 3) -> list[str]:
     """
-    Generate a random digit challenge sequence.
+    Generate a random digit challenge sequence using secrets.randbelow (CSPRNG).
+    Avoids pseudo-random generators (random.randint) to prevent replay/prediction.
 
     Args:
-        length: Number of digits in the challenge (3 or 4 recommended).
+        length: Number of digits in the challenge (3 recommended for spoken ease).
 
     Returns:
         List of digit strings, e.g. ["7", "2", "9"]
     """
-    return [str(random.randint(0, 9)) for _ in range(length)]
+    return [str(secrets.randbelow(10)) for _ in range(length)]
 
 
 def challenge_display(challenge: list[str]) -> str:
@@ -229,15 +428,12 @@ def verify_liveness(transcript: Optional[str], challenge: list[str]) -> tuple[bo
 
     expected = challenge
     if spoken_digits == expected:
-        return True, f"Liveness verified. Heard: {' '.join(spoken_digits)}"
+        return True, "Liveness verified successfully."
 
     if len(spoken_digits) == 0:
-        return False, f"No digits heard in transcript: '{transcript}'"
+        return False, "No digits heard in audio recording."
 
-    return False, (
-        f"Challenge failed. Expected {' '.join(expected)}, "
-        f"heard {' '.join(spoken_digits) if spoken_digits else 'nothing'}."
-    )
+    return False, "Challenge failed: spoken digits did not match the required challenge sequence."
 
 
 def run_liveness_check(audio_path: str, challenge: list[str]) -> tuple[bool, str, Optional[str]]:

@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 2A.1 — Security Review and Verification (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `26bb484`, working tree updated with 2A.1 fixes)  
-**Application Run Status:** Fully Operational (All 20 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 2B — Stateful Liveness Hardening (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `aaac0cc`, working tree updated with 2B implementation)  
+**Application Run Status:** Fully Operational (All 34 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 2A.1 (Security Review and Verification) has successfully verified and hardened the API security boundary. The automated test suite has been expanded from 13 to 20 tests. Demonstrable defects and security edge cases were addressed: upfront `Content-Length` inspection prevents unbounded upload buffering, audio format decoding failures (`soundfile.LibsndfileError`, FFmpeg conversion failures) return HTTP 400 Bad Request instead of false 500 errors, defensive configuration parsers prevent invalid environment variable injections, and verification decision tamper-resistance was strictly tested and confirmed.
+Milestone 2B (Stateful Liveness Hardening) has successfully designed, implemented, and verified a cryptographically secure, stateful challenge-response anti-spoofing engine. Challenge generation was migrated from pseudo-random `random.randint` to CSPRNG `secrets.randbelow(10)`. Challenges are bound to client verification sessions and claimed speaker identities, expire in 60 seconds, and enforce Single-Attempt Invalidation ('burn-on-use') with thread synchronization to defeat replay attacks and concurrent race conditions. Biometric verification in `POST /verify` now strictly requires liveness verification, failing closed without invoking ML inference if liveness checks fail. The automated test suite has expanded from 20 to 34 tests, with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
 
 ---
 
@@ -45,27 +45,35 @@ Milestone 2A.1 (Security Review and Verification) has successfully verified and 
 - Verified zero regressions on `evaluate.py`, `tune_threshold.py`, `predict.py`, and `app.py` (Streamlit AppTest).
 
 ### Milestone 2A.1: Security Review & Verification (Completed)
-- **Review A (Upload Security):**
-  - Added upfront `Content-Length` header check on incoming HTTP requests to reject oversized bodies before reading/spooling payloads.
-  - Handled malformed audio files (e.g. non-audio files renamed to `.wav` or corrupt streams) by catching `soundfile.LibsndfileError` and FFmpeg conversion failures and returning HTTP 400 Bad Request rather than misleading 500 server crashes.
-  - Verified guaranteed temporary file deletion in `finally:` blocks across normal execution, inference exceptions, and parsing errors.
-- **Review B (Threshold Configuration):**
-  - Implemented `load_server_threshold()` with defensive parsing and bounding to `[0.0, 1.0]`, falling back safely to `0.25`.
-  - Implemented `load_max_audio_size()` with positive integer bounds checking, falling back safely to `10MB`.
-  - Formally verified via automated test that client threshold tampering (e.g. submitting `threshold=0.01`) cannot bypass denial or flip an impostor decision to UNLOCK.
-- **Review C (API Test Quality):**
-  - Expanded test suite from 13 to 20 automated tests.
-  - Tests verify actual security decisions and boundaries rather than only status codes (e.g. verifying inference is never invoked on oversized uploads, verifying decisions remain DENY under tampering, verifying temp file cleanup lifecycle).
-- **Review D (Error Handling & Regression):**
-  - Added unit tests verifying `predict_speaker` and `verify_speaker` raise `FileNotFoundError` on missing files and `ValueError` on empty profiles.
-  - Executed full ML and Streamlit regressions: all passed with zero errors.
+- **Review A (Upload Security):** Upfront `Content-Length` header inspection and 64KB chunked spooling. Unreadable audio mapped to HTTP 400.
+- **Review B (Threshold Configuration):** Defensive `load_server_threshold()` and `load_max_audio_size()` bounded parsers. Tamper resistance verified.
+- **Review C (API Test Quality):** Expanded tests from 13 to 20, verifying real security boundaries and temp-file lifecycle.
+- **Review D (Error Handling & Regression):** Typed exceptions in `predict.py` verified; zero ML or UI regressions.
+
+### Milestone 2B: Stateful Liveness Hardening (Completed)
+- **Architecture & Interface:**
+  - Defined `BaseChallengeStore` ABC with `create_challenge`, `get_challenge`, `validate_and_consume`, and `cleanup_expired`.
+  - Implemented `InMemoryChallengeStore` using `threading.Lock` and injectable `time_func` clock abstraction for deterministic testing.
+- **Lifecycle & Security Semantics:**
+  - CSPRNG digit sequence generation (`secrets.randbelow(10)`) and 128-bit random challenge IDs (`secrets.token_hex(16)`).
+  - Strict 60-second Time-to-Live (TTL).
+  - Single-Attempt Invalidation ('burn-on-use') — challenge transitions to `CONSUMED` immediately on verification initiation, defeating replay attacks and concurrent duplicate submissions.
+  - Session and speaker binding: challenges are strictly bound to a `session_id` and optional `claimed_identity`.
+  - Fail-closed execution: liveness failures (wrong digits, silence, transcription failure) deny access and skip SpeechBrain ML inference.
+- **API Endpoints:**
+  - `POST /challenge`: Generates challenge with metadata; supports both JSON and Form payloads.
+  - `POST /verify`: Requires `challenge_id` and `session_id`, enforces liveness passing before executing biometric verification.
+- **Automated Tests:**
+  - Expanded test suite from 20 to 34 automated tests, including race-condition testing across 10 concurrent threads, clock-injected expiry, and tamper resistance.
+- **Streamlit Compatibility:**
+  - Preserved backward-compatible function signatures in `liveness.py`, ensuring `app.py` runs with zero modifications.
 
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Automated API Test Suite** | `.venv/bin/pytest -v tests/test_api.py` | 0 | 20/20 tests PASSED in 1.21s |
+| **Automated API Test Suite** | `.venv/bin/pytest -v tests/test_api.py` | 0 | 34/34 tests PASSED in 1.52s |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Liveness Check** | `.venv/bin/python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Vosk loads, transcribes, properly rejects non-digit audio |
@@ -75,22 +83,26 @@ Milestone 2A.1 (Security Review and Verification) has successfully verified and 
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Small Evaluation Dataset:**
-   - *Risk:* Reported 0.00% EER is computed on only 3 speakers (27 test samples). A threshold of 0.25 is retained as baseline but is NOT certified for production access control without broader multi-environment validation.
-2. **Missing Challenge Expiry and Session Binding in `liveness.py`:**
-   - *Risk:* Liveness challenges in `liveness.py` currently use pseudo-random generator `random.randint` and lack server-side session binding, expiration (TTL), and single-use nonces.
-   - *Plan:* Build a stateful, expiring, cryptographically secure challenge-response verification workflow in Milestone 2B.
-3. **Unauthenticated Public API Endpoints:**
-   - *Risk:* `/identify` and `/verify` currently have no caller authentication or rate-limiting middleware.
-   - *Plan:* Require API tokens / session authorization and rate limiting prior to public deployment.
+1. **In-Memory Challenge Store Scope:**
+   - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` or multi-node clustering causes state divergence.
+   - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in future database milestone.
+2. **Unauthenticated Public Endpoints:**
+   - *Risk:* `/identify`, `/verify`, and `/challenge` have no caller authentication (API tokens/JWT) or rate limiting.
+   - *Plan:* Add Firebase/JWT authentication for users and API keys for IoT devices along with rate-limiting middleware before public deployment.
+3. **Small Evaluation Dataset:**
+   - *Risk:* Reported 0.00% EER is computed on only 3 speakers (27 test samples). Baseline threshold of 0.25 is retained.
+4. **Voice Cloning Limitations:**
+   - *Risk:* Digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 2B: Liveness Protection & Verification Hardening**:
-1. Implement cryptographically secure (`secrets.randbelow`), expiring (TTL), single-use challenge service.
-2. Bind challenges to verification sessions and intended claimed speakers.
-3. Require and enforce liveness verification in the biometric verification workflow.
-4. Add comprehensive automated tests for replay, expiration, invalid nonce, and spoof rejection.
-5. Only then proceed to incremental package modularization.
+Proceed to **Milestone 2C: Incremental API Modularization**:
+1. Safely organize `cloud_api.py` into standard packages:
+   - `app/api/` (routers for health, speakers, identification, verification, challenges)
+   - `app/services/` (biometric service, challenge service)
+   - `app/schemas/` (Pydantic request/response models)
+   - `app/core/` (settings, logging, security constants)
+2. Run the 34-test suite continuously at each incremental extraction step to guarantee zero behavioral regressions.
+
 

@@ -19,10 +19,12 @@ VoiceLock Enterprise is a biometric access-control system that pairs speaker rec
 │     Inference Engine    │   │      Liveness Engine      │
 │       (predict.py)      │   │       (liveness.py)       │
 ├─────────────────────────┤   ├───────────────────────────┤
-│ SpeechBrain ECAPA-TDNN  │   │ Offline Vosk STT Model    │
-│ 192-dim Voiceprint      │   │ 3-digit challenge speech  │
-│ Cosine Similarity       │   │ Word-to-digit parsing     │
-└───────────┬─────────────┘   └─────────────┬─────────────┘
+│ SpeechBrain ECAPA-TDNN  │   │ BaseChallengeStore (ABC)  │
+│ 192-dim Voiceprint      │   │ InMemoryChallengeStore    │
+│ Cosine Similarity       │   │ CSPRNG (secrets.randbelow)│
+│ Server Threshold = 0.25 │   │ Offline Vosk STT Model    │
+└───────────┬─────────────┘   │ Single-Attempt Burn-on-Use│
+            │                 └─────────────┬─────────────┘
             │                               │
             └───────────────┬───────────────┘
                             ▼
@@ -35,6 +37,13 @@ VoiceLock Enterprise is a biometric access-control system that pairs speaker rec
 │ - dataset/ & processed_dataset/ (Audio Files)          │
 └────────────────────────────────────────────────────────┘
 ```
+
+### Challenge Lifecycle and In-Memory Storage Model
+- **Interface:** `BaseChallengeStore` (abstract base class defining `create_challenge`, `get_challenge`, `validate_and_consume`, `cleanup_expired`).
+- **Development Implementation:** `InMemoryChallengeStore` using `threading.Lock` and injectable `time_func` clock abstraction for deterministic testability.
+- **Production Boundary:** Designed for single-worker processes; horizontally scaled or multi-worker deployments must substitute a shared distributed implementation (e.g. Redis or PostgreSQL).
+- **Invalidation Policy:** Single-Attempt Invalidation ("burn-on-use") — challenges transition atomically from `PENDING` to `CONSUMED` on first submission attempt to prevent concurrent replay.
+
 
 ---
 
