@@ -10,6 +10,17 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.2c.1: Persistent User-to-Speaker Identity Mapping Schema and Migration**
+  - Implemented `UserSpeakerMapping` entity in `app/db/base.py` mapping to `user_speaker_mappings`:
+    - Columns: `id` (PK), `firebase_uid` (String(128), unique, indexed, non-null), `speaker_id` (String(64), unique, indexed, non-null, ForeignKey referencing `speakers.speaker_id` ON DELETE CASCADE), `assigned_by` (String(128)), UTC timestamps (`created_at`, `updated_at`), and `metadata_json`.
+    - Bidirectional ORM relationship `speaker` linked to `SpeakerRecord`.
+    - Cardinality decision: Strict 1-to-1 relationship enforced via unique constraints on both `firebase_uid` and `speaker_id` for identity non-repudiation and prevention of voiceprint aliasing.
+    - Sensitive data exclusion: strictly avoids storing passwords, tokens, credentials, or raw audio/embeddings.
+    - Re-exported in `app/db/__init__.py` and `app/core/database.py`.
+  - Created Alembic migration `0b98eaf9dc3e_create_user_speaker_mappings_table.py` with foreign key and index creation in `upgrade()` and clean teardown in `downgrade()`.
+  - Added unit test `test_user_speaker_mappings_schema_migration_and_constraints` in `tests/test_database.py` verifying migration lifecycle, foreign key constraints, 1-to-1 uniqueness enforcement, and single-revision rollback.
+  - Test suite expanded from 120 to 121 passing automated tests.
+
 - **Milestone 3C.2b: Speaker Registry Repository and Unit Tests**
   - Implemented `SpeakerRepository` in `app/repositories/speaker_repository.py` using SQLAlchemy 2.0:
     - Provides data access operations for `SpeakerRecord`: `create()`, `get_by_speaker_id()`, `get_by_id()`, `get_or_raise()`, `list_speakers()`, `get_active_speaker_ids()`, `update()`, `delete()`, and `count()`.

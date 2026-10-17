@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.2b — Speaker Registry Repository & Unit Tests (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `cd27ed9`, working tree updated with 3C.2b)  
-**Application Run Status:** Fully Operational (All 120 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3C.2c.1 — Persistent User-to-Speaker Identity Mapping Schema & Migration (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `ea37294`, working tree updated with 3C.2c.1 implementation)  
+**Application Run Status:** Fully Operational (All 121 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.2b establishes the dedicated repository layer for speaker identity persistence via `SpeakerRepository` in `app/repositories/speaker_repository.py`. Built strictly on SQLAlchemy 2.0 idioms (`select`, `scalar`, `scalars`), the repository cleanly encapsulates all database operations on the `speakers` table while leaving transaction boundaries under the explicit control of the caller (session dependency or context manager) via non-committing `session.flush()` calls. It provides validation and creation (`create`), exact lookups (`get_by_speaker_id`, `get_by_id`), predictable missing record handling (`get_or_raise` with `SpeakerNotFoundError`), list queries with active status filtering and pagination (`list_speakers`, `get_active_speaker_ids`), permitted metadata and lifecycle status updates (`update`), deletion (`delete`), and count metrics (`count`). A dedicated unit test suite (`tests/test_speaker_repository.py`, 12 tests) exercises every operation against disposable SQLite databases, including caller-controlled transaction rollback and unique constraint enforcement (`DuplicateSpeakerError`). Total automated tests have expanded to 120 with zero regressions across baseline API, security, Streamlit, and SpeechBrain workflows.
+Milestone 3C.2c.1 establishes the persistent database schema and migration infrastructure for mapping authenticated application users (Firebase UID) to enrolled biometric speaker identities (`speakers.speaker_id`). Implemented via `UserSpeakerMapping` in `app/db/base.py`, the design enforces a strict 1-to-1 cardinality via unique indexes on both `firebase_uid` and `speaker_id`, coupled with cascading foreign key referential integrity (`ForeignKey("speakers.speaker_id", ondelete="CASCADE")`). This guarantees identity non-repudiation: a physical voiceprint cannot be shared across multiple user accounts (eliminating audit ambiguity), and an ordinary user cannot verify against multiple voiceprints. The schema strictly excludes credentials, tokens, and biometric raw data. Alembic migration `0b98eaf9dc3e_create_user_speaker_mappings_table.py` was created and validated with end-to-end upgrade, foreign key verification, 1-to-1 uniqueness rejection, and single-revision rollback against disposable SQLite databases. The automated test suite has expanded to 121 tests passing in 2.77s with zero regressions. Authorization enforcement is deliberately preserved for Milestone 3C.2c.2.
 
 ---
 
@@ -220,14 +220,43 @@ Milestone 3C.2b establishes the dedicated repository layer for speaker identity 
     - Explicit transaction boundary verification (caller rollback drops uncommitted repo changes).
   - Expanded total automated test suite from 108 to 120 passing tests.
 
+### Milestone 3C.2c.1: Persistent User-to-Speaker Identity Mapping Schema & Migration (Completed)
+- **Declarative Identity Mapping Model (`app/db/base.py`):**
+  - Created `UserSpeakerMapping` entity mapping the `user_speaker_mappings` table.
+  - Defined fields:
+    - `id`: Autoincrement primary key (`Integer`).
+    - `firebase_uid`: External application user identifier (`String(128)`, unique, indexed, non-null).
+    - `speaker_id`: Enrolled voice identity (`String(64)`, unique, indexed, non-null) with foreign key `ForeignKey("speakers.speaker_id", ondelete="CASCADE")`.
+    - `assigned_by`: Audit trail identifier of the provisioning admin/bootstrap (`String(128)`, nullable).
+    - `created_at` / `updated_at`: Timezone-aware UTC timestamps (`DateTime(timezone=True)`).
+    - `metadata_json`: Provisioning metadata (`Text`, nullable).
+    - ORM relationship `speaker` mapped back to `SpeakerRecord`.
+  - Re-exported `UserSpeakerMapping` in `app/db/__init__.py` and `app/core/database.py`.
+- **Cardinality Decision & Rationale:**
+  - **Decision:** Strict 1-to-1 cardinality enforced through independent `UNIQUE` constraints on both `firebase_uid` and `speaker_id`.
+  - **Rationale:** Non-repudiation in enterprise biometric authentication mandates that a human voiceprint cannot be shared across multiple user accounts (preventing credential sharing, delegation, and audit trail ambiguity). Similarly, an ordinary user account cannot impersonate or verify on behalf of multiple enrolled speaker identities.
+- **Data Protection & Secret Exclusion:**
+  - Strictly excludes Firebase passwords, ID tokens, service account credentials, biometric audio recordings, and 192-d embedding vectors.
+- **Alembic Migration (`0b98eaf9dc3e_create_user_speaker_mappings_table.py`):**
+  - Created revision chained to `a4ae5dfd43b3` (`create_speakers_table`).
+  - Implemented `upgrade()` and `downgrade()` managing table creation, foreign keys, unique indices, and cleanup.
+- **Automated Schema & Constraint Tests (`tests/test_database.py`):**
+  - Added `test_user_speaker_mappings_schema_migration_and_constraints`:
+    - Verifies migration upgrade to head, foreign key inspection to `speakers.speaker_id`, and unique index existence.
+    - Validates valid insertion and ORM relationship traversal.
+    - Enforces 1-to-1 uniqueness: duplicate `firebase_uid` raises `IntegrityError`; duplicate `speaker_id` raises `IntegrityError`.
+    - Validates single-revision rollback (`0b98eaf9dc3e -> a4ae5dfd43b3`) dropping `user_speaker_mappings` while retaining `speakers` and `schema_initializations`.
+    - Verifies re-application of `upgrade head`.
+  - Total automated tests expanded to 121 passing tests in 2.77s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **120/120 tests PASSED in 2.67s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 14 Database + 12 Speaker Repository) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **121/121 tests PASSED in 2.77s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 15 Database + 12 Speaker Repository) |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **15/15 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema & rollback) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, active filters, validation, duplicate rejection, rollback) |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **14/14 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema & rollback) |
 | **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
@@ -254,11 +283,12 @@ Milestone 3C.2b establishes the dedicated repository layer for speaker identity 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.2c: User-to-Speaker Identity Mapping & Authorization Tests**:
-1. Implement SQLAlchemy 2.0 model and Alembic migration for user accounts and persistent user-to-speaker identity bindings.
-2. Update user authorization checks in `POST /verify` to query persistent identity bindings from the database.
-3. Add unit and integration tests verifying that users can verify only their bound speaker profile while admins can verify any profile.
-4. Maintain full regression coverage and verify migrations against disposable test databases.
+Proceed to **Milestone 3C.2c.2: Persistent Authorization Enforcement**:
+1. Implement database-backed user identity resolution querying `UserSpeakerMapping` in `app/core/device_auth.py` / `check_verification_authorization`.
+2. Enforce that ordinary web users can verify only their bound speaker identity resolved from the database mapping.
+3. Ensure administrative users can verify any speaker identity via established administrative policies.
+4. Add authorization and regression tests covering mapped users, unmapped users, mismatched claimed identities, and admin overrides.
+5. Push completed 3C.2c.2 increment to `feature/enterprise-foundation` before proceeding to Milestone 3C.3.
 
 
 

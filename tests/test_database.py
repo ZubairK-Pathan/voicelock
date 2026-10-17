@@ -24,7 +24,7 @@ from sqlalchemy.pool import StaticPool, QueuePool
 from alembic.config import Config
 from alembic import command
 
-from app.db.base import Base, SchemaInitialization, SpeakerRecord
+from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -207,6 +207,7 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         tables = inspector.get_table_names()
         assert "schema_initializations" in tables
         assert "speakers" in tables
+        assert "user_speaker_mappings" in tables
         assert "alembic_version" in tables
 
         # Step 2: Verify table operations
@@ -229,6 +230,7 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         tables_post = inspector_post.get_table_names()
         assert "schema_initializations" not in tables_post
         assert "speakers" not in tables_post
+        assert "user_speaker_mappings" not in tables_post
         engine_post.dispose()
 
     finally:
@@ -310,6 +312,134 @@ def test_speakers_schema_migration_and_constraints(monkeypatch):
         engine_reup = create_db_engine(disposable_url)
         tables_reup = inspect(engine_reup).get_table_names()
         assert "speakers" in tables_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+def test_user_speaker_mappings_schema_migration_and_constraints(monkeypatch):
+    """
+    Verify user_speaker_mappings table creation, foreign keys, unique constraints (1-to-1),
+    ORM mappings, and single-revision migration rollback.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Migrate to head (runs initial, speakers, and user_speaker_mappings migrations)
+        command.upgrade(alembic_cfg, "head")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "user_speaker_mappings" in tables
+        assert "speakers" in tables
+
+        # Verify foreign keys and indexes via inspector
+        fks = inspector.get_foreign_keys("user_speaker_mappings")
+        assert len(fks) >= 1
+        assert fks[0]["referred_table"] == "speakers"
+        assert fks[0]["referred_columns"] == ["speaker_id"]
+
+        indexes = {idx["name"]: idx for idx in inspector.get_indexes("user_speaker_mappings")}
+        assert "ix_user_speaker_mappings_firebase_uid" in indexes
+        assert indexes["ix_user_speaker_mappings_firebase_uid"]["unique"] == 1
+        assert "ix_user_speaker_mappings_speaker_id" in indexes
+        assert indexes["ix_user_speaker_mappings_speaker_id"]["unique"] == 1
+        engine.dispose()
+
+        # 2. Insert valid SpeakerRecord and UserSpeakerMapping via ORM session
+        with get_db_context() as session:
+            speaker = SpeakerRecord(
+                speaker_id="Zubair",
+                full_name="Zubair K. Pathan",
+                status="active",
+                embedding_dim=192,
+                sample_count=3,
+            )
+            session.add(speaker)
+            mapping = UserSpeakerMapping(
+                firebase_uid="firebase_uid_zubair_test_123",
+                speaker_id="Zubair",
+                assigned_by="admin_bootstrap",
+                metadata_json='{"provisioned_at": "test_suite"}',
+            )
+            session.add(mapping)
+
+        # 3. Query back and verify ORM fields and relationships
+        with get_db_context() as session:
+            record = session.scalar(
+                select(UserSpeakerMapping).where(
+                    UserSpeakerMapping.firebase_uid == "firebase_uid_zubair_test_123"
+                )
+            )
+            assert record is not None
+            assert record.firebase_uid == "firebase_uid_zubair_test_123"
+            assert record.speaker_id == "Zubair"
+            assert record.assigned_by == "admin_bootstrap"
+            assert record.metadata_json == '{"provisioned_at": "test_suite"}'
+            assert record.created_at is not None
+            assert record.updated_at is not None
+            # Test ORM relationship traversal
+            assert record.speaker is not None
+            assert record.speaker.speaker_id == "Zubair"
+            assert record.speaker.full_name == "Zubair K. Pathan"
+
+        # 4. Enforce 1-to-1 cardinality: Duplicate firebase_uid must be rejected
+        with get_db_context() as session:
+            speaker2 = SpeakerRecord(speaker_id="Advait", full_name="Advait Patel")
+            session.add(speaker2)
+
+        with pytest.raises(IntegrityError):
+            with get_db_context() as session:
+                duplicate_user = UserSpeakerMapping(
+                    firebase_uid="firebase_uid_zubair_test_123",  # Same user
+                    speaker_id="Advait",                           # Different speaker
+                )
+                session.add(duplicate_user)
+
+        # 5. Enforce 1-to-1 cardinality: Duplicate speaker_id must be rejected
+        with pytest.raises(IntegrityError):
+            with get_db_context() as session:
+                duplicate_speaker = UserSpeakerMapping(
+                    firebase_uid="firebase_uid_new_user_456",     # Different user
+                    speaker_id="Zubair",                          # Already mapped speaker
+                )
+                session.add(duplicate_speaker)
+
+        reset_engine()
+
+        # 6. Single-revision rollback (0b98eaf9dc3e -> a4ae5dfd43b3)
+        command.downgrade(alembic_cfg, "a4ae5dfd43b3")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "user_speaker_mappings" not in tables
+        assert "speakers" in tables
+        assert "schema_initializations" in tables
+        engine.dispose()
+
+        # 7. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        tables_reup = inspect(engine_reup).get_table_names()
+        assert "user_speaker_mappings" in tables_reup
         engine_reup.dispose()
 
     finally:
