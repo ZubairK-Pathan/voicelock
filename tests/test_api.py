@@ -677,3 +677,21 @@ def test_in_memory_challenge_store_cleanup_expired():
     assert store.get_challenge(ch1.challenge_id) is None
     assert store.get_challenge(ch2.challenge_id) is not None
 
+
+def test_verify_invalid_challenge_rejects_before_saving_upload():
+    """Verify that calling /verify with an invalid or expired challenge rejects before saving audio upload."""
+    dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+    with patch("cloud_api.save_upload") as mock_save:
+        response = client.post(
+            "/verify",
+            data={
+                "claimed_identity": "Zubair",
+                "challenge_id": "ch_nonexistent_test",
+                "session_id": "sess_dummy",
+            },
+            files={"audio": ("test.wav", io.BytesIO(dummy_wav), "audio/wav")},
+        )
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+

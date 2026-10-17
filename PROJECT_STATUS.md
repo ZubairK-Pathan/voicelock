@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 2B — Stateful Liveness Hardening (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `aaac0cc`, working tree updated with 2B implementation)  
-**Application Run Status:** Fully Operational (All 34 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 2C — Security Review & Incremental API Modularization (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `ee0306c`, working tree updated with 2C implementation)  
+**Application Run Status:** Fully Operational (All 35 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 2B (Stateful Liveness Hardening) has successfully designed, implemented, and verified a cryptographically secure, stateful challenge-response anti-spoofing engine. Challenge generation was migrated from pseudo-random `random.randint` to CSPRNG `secrets.randbelow(10)`. Challenges are bound to client verification sessions and claimed speaker identities, expire in 60 seconds, and enforce Single-Attempt Invalidation ('burn-on-use') with thread synchronization to defeat replay attacks and concurrent race conditions. Biometric verification in `POST /verify` now strictly requires liveness verification, failing closed without invoking ML inference if liveness checks fail. The automated test suite has expanded from 20 to 34 tests, with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
+Milestone 2C (Security Review and Incremental API Modularization) has completed a comprehensive security review of the stateful challenge engine and successfully refactored the monolithic `cloud_api.py` into a clean, decoupled enterprise application package (`app/`). In `POST /verify`, challenge validation and atomic consumption now execute strictly *before* saving audio uploads or reading payloads from the network, eliminating disk I/O and buffering denial-of-service on invalid or expired challenges. The codebase now features dedicated modules for configuration (`app/core/config.py`), exception helpers (`app/core/errors.py`), Pydantic schemas (`app/schemas/`), service singletons (`app/services/`), and route controllers (`app/api/`). A dynamic lookup adapter ensures full backward compatibility with test patches targeting `cloud_api`, and `cloud_api.py` remains the legacy root entry point. All 35 automated tests, the full ML evaluation suite (27/27 samples correct, 100% accuracy), threshold calibration, and the Streamlit AppTest pass with zero regressions.
 
 ---
 
@@ -68,41 +68,61 @@ Milestone 2B (Stateful Liveness Hardening) has successfully designed, implemente
 - **Streamlit Compatibility:**
   - Preserved backward-compatible function signatures in `liveness.py`, ensuring `app.py` runs with zero modifications.
 
+### Milestone 2C: Security Review & Incremental API Modularization (Completed)
+- **Early Challenge Invalidation Before Upload Processing:**
+  - Reordered verification pipeline in `POST /verify`: atomically validates and consumes the challenge *before* calling `save_upload()`, preventing disk writes and buffering exhaustion from unauthorized, expired, or mismatched tokens.
+  - Added automated test `test_verify_invalid_challenge_rejects_before_saving_upload`.
+- **Modular Package Architecture (`app/`):**
+  - `app/core/`: Centralized configuration (`config.py`) and typed error helpers (`errors.py`).
+  - `app/schemas/`: Pydantic validation models for challenges (`challenge.py`) and verification/speakers/health (`verification.py`).
+  - `app/services/`: Service layer isolating model caching (`speaker_service.py`), challenge operations (`challenge_service.py`), and chunked audio streaming (`verification_service.py`).
+  - `app/api/`: Sub-routers for `routes_health.py`, `routes_speakers.py`, `routes_challenges.py`, and `routes_verification.py`.
+  - `app/main.py`: Application factory (`create_app`) with modern FastAPI `lifespan` handler replacing deprecated `@app.on_event("startup")`.
+- **Backward-Compatible Entry Point (`cloud_api.py`):**
+  - Preserved `cloud_api.py` as a transparent root entry point re-exporting all symbols for CLI commands (`uvicorn cloud_api:app --host 0.0.0.0 --port 8000`) and integrations.
+  - Implemented dynamic accessor lookup pattern in route controllers to seamlessly support `unittest.mock.patch("cloud_api.*")` without circular imports.
+- **Verification & Zero Regressions:**
+  - All 35 tests in `tests/test_api.py` pass cleanly in 1.2s.
+  - Streamlit `app.py` AppTest passes with zero crashes.
+  - ML inference, evaluation (27/27 correct, 100% accuracy), and threshold calibration execute successfully.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Automated API Test Suite** | `.venv/bin/pytest -v tests/test_api.py` | 0 | 34/34 tests PASSED in 1.52s |
+| **Automated API Test Suite** | `.venv/bin/pytest -v` | 0 | 35/35 tests PASSED in 1.21s |
+| **Early Rejection Test** | `.venv/bin/pytest -k test_verify_invalid_challenge_rejects_before_saving_upload` | 0 | PASSED (Upload save not called on invalid challenge) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
-| **Liveness Check** | `.venv/bin/python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Vosk loads, transcribes, properly rejects non-digit audio |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
-| **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs, finds 4 tabs with zero crashes |
+| **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs with zero exceptions |
 
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **In-Memory Challenge Store Scope:**
-   - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` or multi-node clustering causes state divergence.
+1. **Session IDs are Correlation Tokens, Not Authentication:**
+   - *Risk:* A client-provided `session_id` binds challenge generation to verification, but does NOT authenticate the principal. An attacker guessing or sharing session IDs could associate verification attempts.
+   - *Requirement:* Challenges must eventually bind to authenticated principals (JWT tokens or mTLS device keys). Endpoints remain private to development.
+2. **In-Memory Challenge Store Scope:**
+   - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in future database milestone.
-2. **Unauthenticated Public Endpoints:**
+3. **Unauthenticated Public Endpoints:**
    - *Risk:* `/identify`, `/verify`, and `/challenge` have no caller authentication (API tokens/JWT) or rate limiting.
    - *Plan:* Add Firebase/JWT authentication for users and API keys for IoT devices along with rate-limiting middleware before public deployment.
-3. **Small Evaluation Dataset:**
+4. **Small Evaluation Dataset:**
    - *Risk:* Reported 0.00% EER is computed on only 3 speakers (27 test samples). Baseline threshold of 0.25 is retained.
-4. **Voice Cloning Limitations:**
-   - *Risk:* Digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
+5. **Voice Cloning Limitations:**
+   - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 2C: Incremental API Modularization**:
-1. Safely organize `cloud_api.py` into standard packages:
-   - `app/api/` (routers for health, speakers, identification, verification, challenges)
-   - `app/services/` (biometric service, challenge service)
-   - `app/schemas/` (Pydantic request/response models)
-   - `app/core/` (settings, logging, security constants)
-2. Run the 34-test suite continuously at each incremental extraction step to guarantee zero behavioral regressions.
+Proceed to **Milestone 3: Authentication, Rate Limiting & Access Control**:
+1. Implement JWT bearer token validation (Firebase Auth / local JWT).
+2. Implement device API key authentication for IoT demonstration terminals.
+3. Add rate limiting middleware (e.g. slowapi / Redis rate limiter) to protect biometric inference and challenge generation from brute force.
+4. Keep the unauthenticated API strictly private until these authentication and rate-limiting safeguards are in place.
+
 
 

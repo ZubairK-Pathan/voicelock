@@ -38,3 +38,21 @@
 * **Status:** Accepted
 * **Context:** SpeechBrain 1.1.0 does not natively support PyTorch MPS (`mps`) device types on Apple Silicon and crashes if forced to MPS.
 * **Decision:** Force `device="cpu"` in `load_embedding_model()`. The ECAPA-TDNN model is compact (~7M parameters) and completes CPU inference in ~1.5 seconds, ensuring universal compatibility across macOS local environments and Linux Docker containers.
+
+---
+
+## ADR 005: Incremental API Modularization & Early Challenge Invalidation
+* **Status:** Accepted
+* **Context:** `cloud_api.py` was a monolithic 478-line script containing configuration parsers, model caches, upload spooling logic, and all HTTP/WebSocket endpoints. Furthermore, during verification, audio uploads were streamed and written to temporary files before verifying whether the submitted challenge ID was valid, resulting in unnecessary disk I/O on invalid requests.
+* **Decision:**
+  1. Modularize the FastAPI application into the standard enterprise `app/` package:
+     - `app/core/config.py` & `app/core/errors.py`: Configuration and HTTP error handling.
+     - `app/schemas/`: Pydantic data schemas for validation and API contracts.
+     - `app/services/`: Single-responsibility service layer (`speaker_service`, `challenge_service`, `verification_service`).
+     - `app/api/`: Sub-routers for health, speakers, challenges, and verification.
+     - `app/main.py`: Application factory (`create_app`) with modern FastAPI lifespan management.
+  2. Maintain `cloud_api.py` as a 100% backward-compatible entry point re-exporting all public functions and models.
+  3. Implement dynamic accessor functions in `app/api/` (`_get_system()`, `_get_challenge_store()`, etc.) that inspect `sys.modules.get("cloud_api")`, preserving full compatibility with legacy `unittest.mock.patch("cloud_api.*")` calls without introducing circular dependencies.
+  4. In `POST /verify`, atomically validate and consume the liveness challenge *before* calling `save_upload()`, rejecting invalid, expired, reused, or session-mismatched challenges upfront with HTTP 400 before payload spooling or disk I/O.
+* **Consequences:** Provides clean architectural separation and service extensibility while preserving identical HTTP contracts, full backward compatibility, and zero regressions across all 35 automated tests.
+

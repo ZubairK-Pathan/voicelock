@@ -27,10 +27,16 @@
 1. **Cryptographically Secure Randomness:** Digit generation uses `secrets.randbelow(10)` (CSPRNG), not `random.randint`. Challenge IDs use `secrets.token_hex(16)`.
 2. **Short Time-to-Live (TTL):** Challenges expire strictly after 60 seconds.
 3. **Single-Attempt Invalidation ('Burn-on-Use'):** A challenge transitions from `PENDING` to `CONSUMED` immediately upon verification initiation, regardless of whether speech or biometric checks succeed. This prevents brute-force attempts and replay attacks against active tokens.
-4. **Session & Speaker Binding:** Challenges are bound to a client `session_id` and optionally to `claimed_identity`. Requests with mismatched session IDs or claimed identities are rejected with HTTP 400.
-5. **Fail-Closed Execution:** If liveness transcription fails (empty audio, unrecognized speech, or mismatched digits), the API fails closed, returns `action: DENY`, and strictly skips expensive biometric inference.
-6. **In-Memory Store Scope & Production Limitations:** The current `InMemoryChallengeStore` is thread-safe within a single Python process. In multi-worker (`--workers > 1`) or distributed horizontal environments, an external distributed store (Redis / PostgreSQL) implementing `BaseChallengeStore` must be used.
-7. **Public Exposure Warning:** Endpoints `/identify`, `/verify`, and `/challenge` are currently unauthenticated. Public exposure is strictly prohibited until API token authentication and rate limiting are implemented.
+4. **Early Invalidation & Resource Exhaustion Defense:** In `POST /verify`, the challenge is atomically validated and consumed *before* spooling or writing audio uploads to disk. If the challenge is missing, expired, reused, or session-mismatched, the request fails immediately with HTTP 400 before any audio file I/O or buffering occurs.
+5. **Caller-Supplied Session IDs as Ephemeral Correlation Tokens (Not Authentication):**
+   - *Security Clarification:* A client-provided `session_id` is an ephemeral correlation handle to bind challenge generation to a verification submission. It does **not** constitute cryptographically verified principal authentication or user identity.
+   - *Risk:* If a client generates its own `session_id`, an attacker who intercepts or predicts this token could potentially associate requests. Unpredictable 128-bit challenge IDs mitigate guessing, but session tokens do not replace authentication.
+   - *Requirement:* In production deployments, verification must bind to an authenticated principal identity (e.g., Firebase Auth JWT or mutual TLS device identity). The unauthenticated API is strictly private to development and MUST NOT be exposed publicly.
+6. **Session & Speaker Binding:** Challenges are bound to a client `session_id` and optionally to `claimed_identity`. Requests with mismatched session IDs or claimed identities are rejected with HTTP 400.
+7. **Fail-Closed Execution:** If liveness transcription fails (empty audio, unrecognized speech, or mismatched digits), the API fails closed, returns `action: DENY`, and strictly skips expensive biometric inference.
+8. **In-Memory Store Scope & Production Limitations:** The current `InMemoryChallengeStore` is thread-safe within a single Python process. In multi-worker (`--workers > 1`) or distributed horizontal environments, an external distributed store (Redis / PostgreSQL) implementing `BaseChallengeStore` must be used.
+9. **Spoken Digit Protection Boundary:** Spoken 3-digit challenges mitigate static audio replay attacks, but do **not** provide complete protection against real-time, low-latency AI voice synthesis or deepfake streaming engines.
+10. **Public Exposure Warning:** Endpoints `/identify`, `/verify`, and `/challenge` are currently unauthenticated. Public exposure is strictly prohibited until API token authentication and rate limiting are implemented.
 
 ---
 

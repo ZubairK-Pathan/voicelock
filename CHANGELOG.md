@@ -10,13 +10,22 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Modularized FastAPI backend into standard enterprise `app/` package layout:
+  - `app/core/config.py`: Centralized configuration (`SERVER_THRESHOLD`, `MAX_AUDIO_SIZE_BYTES`, `ALLOWED_EXTENSIONS`) with defensive bounded loaders.
+  - `app/core/errors.py`: Sanitized HTTP exception factories.
+  - `app/schemas/`: Typed Pydantic data models for challenge requests/responses and verification contracts.
+  - `app/services/`: Service layer separating model singleton caching (`speaker_service`), challenge management (`challenge_service`), and chunked audio upload spooling (`verification_service`).
+  - `app/api/`: Sub-routers for `/` (health), `/speakers`, `/challenge`, and biometric routes (`/identify`, `/verify`, `/ws/identify`).
+  - `app/main.py`: Application factory with modern FastAPI `lifespan` handler for single-pass model pre-warming.
+- Refactored `cloud_api.py` as a 100% backward-compatible root entry point re-exporting all public symbols and functions.
+- Implemented dynamic accessor lookup pattern in route handlers for test patch compatibility without circular dependencies.
+- Added targeted test `test_verify_invalid_challenge_rejects_before_saving_upload`, expanding automated test suite to 35 tests.
 - Implemented stateful liveness challenge engine (`liveness.py`) with `BaseChallengeStore` abstract interface and thread-safe `InMemoryChallengeStore`.
 - Added cryptographically secure challenge generation using `secrets.randbelow(10)` (CSPRNG) and `secrets.token_hex(16)`.
-- Added `POST /challenge` endpoint in `cloud_api.py` supporting both JSON and Form requests, binding challenges to session IDs and claimed speaker identities with 60-second TTL.
+- Added `POST /challenge` endpoint supporting both JSON and Form requests, binding challenges to session IDs and claimed speaker identities with 60-second TTL.
 - Enforced challenge consumption in `POST /verify` with Single-Attempt Invalidation ('burn-on-use'), rejecting replay and concurrent duplicate submissions.
 - Bound speaker verification to successful spoken digit liveness check; failed or unparseable audio denies access immediately without running ML inference.
-- Expanded automated test suite from 20 to 34 tests in `tests/test_api.py`, including race-condition testing across 10 concurrent threads, deterministic expiry via clock injection, session binding, and fail-closed error handling.
-- Added automated test suite in `tests/test_api.py` with comprehensive unit, integration, and security edge case tests.
+- Expanded automated test suite with race-condition testing across 10 concurrent threads, deterministic expiry via clock injection, session binding, and fail-closed error handling.
 - Added upfront `Content-Length` header verification in `save_upload()` to reject oversized payloads prior to reading request bodies.
 - Added defensive configuration loaders `load_server_threshold()` and `load_max_audio_size()` with bounds checking and safe fallbacks.
 - Added `pytest` and `httpx` to `requirements.txt`.
@@ -24,17 +33,23 @@ and this project adheres to Semantic Versioning.
 - Added comprehensive handoff documentation suite (`AGENTS.md`, `PROJECT_STATUS.md`, `ARCHITECTURE.md`, `DEVELOPMENT.md`, `DECISIONS.md`, `SECURITY.md`, `CHANGELOG.md`).
 
 ### Fixed
+- Reordered verification pipeline in `POST /verify` to atomically validate and consume challenges *before* reading or spooling upload payloads, preventing resource exhaustion from invalid or expired requests.
+- Replaced deprecated `@app.on_event("startup")` with modern FastAPI `lifespan` context manager, eliminating deprecation warnings.
 - Fixed unhandled audio decoding errors (`soundfile.LibsndfileError`, FFmpeg conversion failures) by mapping them to HTTP 400 Bad Request instead of internal server errors.
 - Fixed process termination in `predict.py` by replacing `sys.exit(1)` with `FileNotFoundError` and `ValueError`.
 - Fixed `AttributeError: 'list' object has no attribute 'values'` in `tune_threshold.py`.
 - Updated `.gitignore` to prevent tracking of `firebase-credentials.json`, `.env`, and private key files.
 
 ### Security
+- Enforced early challenge invalidation and session check before disk I/O in `POST /verify`.
+- Documented security boundary of caller-supplied `session_id` tokens as ephemeral correlation tokens rather than verified principal authentication.
+- Documented in-memory challenge store boundaries and single-process deployment limits.
+- Documented threat model boundary regarding spoken digit challenges and low-latency synthetic voice deepfakes.
 - Replaced pseudo-random challenge generation (`random.randint`) with CSPRNG (`secrets.randbelow(10)`).
 - Implemented single-attempt challenge invalidation ('burn-on-use') to defeat token replay and brute-force testing.
 - Prevented concurrent submission race conditions via reentrant thread synchronization on challenge consumption.
 - Bound challenge tokens to specific verification sessions and claimed speaker identities.
-- Enforced server-side calibrated threshold (`SERVER_THRESHOLD = 0.25`) in `cloud_api.py`, ignoring and rejecting client threshold tampering.
+- Enforced server-side calibrated threshold (`SERVER_THRESHOLD = 0.25`) in API, ignoring and rejecting client threshold tampering.
 - Implemented `MAX_AUDIO_SIZE_BYTES` (10MB) upload ceiling with HTTP 413 rejection and early `Content-Length` rejection.
 - Enforced audio extension whitelisting (`.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.aac`).
 - Added guaranteed temporary file cleanup via `try/finally` across success, client disconnect, and error paths.

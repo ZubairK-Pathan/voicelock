@@ -34,15 +34,30 @@ streamlit run app.py
 ```
 *Accessible at `http://localhost:8501`.*
 
-### FastAPI Inference Server (Current Prototype)
+### FastAPI Inference Server
+Run via the legacy entry point (100% backward-compatible):
 ```bash
 uvicorn cloud_api:app --host 0.0.0.0 --port 8000 --reload
+```
+Or run directly via the new modular application package:
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 *Interactive Swagger docs available at `http://localhost:8000/docs`.*
 
 ---
 
-## 4. Running ML Scripts & Baseline Evaluation
+## 4. Running Tests & Baseline Verification
+
+```bash
+# Run full automated test suite (35 tests)
+pytest -v
+
+# Run targeted test
+pytest tests/test_api.py -k test_verify_real_audio_success
+```
+
+## 5. Running ML Scripts & Baseline Evaluation
 ```bash
 # Speaker identification on a single audio file
 python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
@@ -59,7 +74,7 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
 
 ---
 
-## 5. Coding Standards & Safety
+## 6. Coding Standards & Safety
 - **No Mock Predictions in Production:** Always route real inference through `predict_speaker` / `verify_speaker`.
 - **Preserve Error Handling:** Do not call `sys.exit()` in code imported by web frameworks; raise custom exceptions instead.
 - **Never Hardcode Secrets:** Use `.env` and environment variables. Verify changes with `git status` and `git diff` before committing.
