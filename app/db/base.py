@@ -3,6 +3,7 @@ app/db/base.py — SQLAlchemy 2.0 Declarative Base and foundational migration en
 """
 
 from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,4 +31,38 @@ class SchemaInitialization(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    description: Mapped[str] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class SpeakerRecord(Base):
+    """
+    Durable speaker identity registry record.
+    Stores registered speaker identity metadata, enrollment parameters,
+    and lifecycle status while raw 192-d biometric vectors are preserved
+    in speaker_profiles/profiles.pkl.
+    """
+    __tablename__ = "speakers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    speaker_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, default=192, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+

@@ -5,6 +5,7 @@ app/core/database.py — Re-export database utilities for core module integratio
 from app.db import (
     Base,
     SchemaInitialization,
+    SpeakerRecord,
     get_database_url,
     normalize_database_url,
     mask_database_url,
@@ -19,6 +20,7 @@ from app.db import (
 __all__ = [
     "Base",
     "SchemaInitialization",
+    "SpeakerRecord",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",

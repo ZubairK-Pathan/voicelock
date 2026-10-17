@@ -129,23 +129,37 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
 ---
 
 ## 9. Incremental Delivery & GitHub Synchronization Policy
-VoiceLock follows a strict incremental commit-and-push workflow for every completed task:
-1. **Implement a small, coherent change.**
-2. **Add or update targeted tests** covering happy paths, edge cases, and security boundaries.
-3. **Run relevant tests and required regression checks** (`pytest`, `evaluate.py`, `tune_threshold.py`, `predict.py`).
-4. **Review the diff and scan for secrets** (`firebase-credentials.json`, `.env`), biometric audio recordings, datasets, model caches, and generated artifacts.
-5. **Update applicable project documentation** (`PROJECT_STATUS.md`, `CHANGELOG.md`, `SECURITY.md`, etc.).
-6. **Commit using a clear conventional commit message.**
-7. **Push the feature branch to GitHub:**
-   ```bash
-   git push -u origin feature/enterprise-foundation
-   ```
-8. **Verify remote synchronization** (ensure local HEAD matches remote branch commit).
-9. **Report the commit hash, tests, and pushed branch before starting the next increment.**
+VoiceLock enforces a standing incremental commit-and-push workflow for every small, completed logical increment to build a robust and verifiable GitHub contribution history:
 
-**Safeguards:**
-- Never push directly to `main`.
-- Never force-push or rewrite published Git history.
-- Never commit credentials, private keys, or biometric datasets.
+### Incremental Protocol Rules:
+1. **Divide into Small Increments:** Break each milestone into small, independently testable units (e.g. 3C.2a schema, 3C.2b repository, 3C.2c authorization). Never batch entire milestones into single large commits.
+2. **Execute Increment Workflow:**
+   a. Implement one coherent piece of functionality.
+   b. Add or update targeted unit and integration tests.
+   c. Run the targeted tests.
+   d. Run relevant regression checks (`pytest`, `evaluate.py`, `tune_threshold.py`, `predict.py`).
+   e. Review the complete diff.
+   f. Scan for secrets (`firebase-credentials.json`, `.env`), biometric audio recordings, datasets, model caches, and generated artifacts.
+   g. Update applicable project documentation (`PROJECT_STATUS.md`, `CHANGELOG.md`, `SECURITY.md`, etc.).
+   h. Create a meaningful conventional commit (e.g. `feat(database): define speaker registry schema and migration`).
+   i. **PUSH THAT COMMIT TO GITHUB IMMEDIATELY:**
+      ```bash
+      git push -u origin feature/enterprise-foundation
+      ```
+   j. Verify remote synchronization (`git rev-parse HEAD == git rev-parse origin/feature/enterprise-foundation`).
+   k. Report the commit hash and successful push before proceeding.
+3. **No Batching:** Do not wait until the entire milestone is complete to push.
+4. **Strict Sequencing:** Do not start the next logical increment until the current increment has been committed, pushed, and verified.
+5. **No Broken Pushes:** If any test fails, resolve the issue before pushing. Never push knowingly broken increments.
+6. **Push Failure Handling:** If a push fails, halt and diagnose the issue immediately. Do not proceed to subsequent increments without publishing the current one.
+7. **Official Authentication:** If GitHub credentials expire, request official authentication flow. Never prompt for plaintext tokens, passwords, or keys in chat.
+8. **Genuine Contributions:** Never create empty, artificial, or duplicate commits. Every commit must reflect genuine, reviewed code or documentation.
+9. **Git Safeguards:** Never push directly to `main`, force-push (`--force`), or rewrite remote history.
+10. **Data Protection:** Never commit secrets, service account credentials, biometric audio, or dataset files.
+11. **Compatibility Preservation:** Preserve Streamlit reference implementation and existing security boundaries.
+12. **Start-of-Session Verification:** Always verify current branch, local HEAD, remote HEAD, and working-tree cleanliness before initiating changes.
+13. **End-of-Increment Reporting:** Detail increment name, files changed, tests run, commit hash, remote branch, and verification status.
+14. **Doc Synchronization:** Maintain `AGENTS.md` and `DEVELOPMENT.md` alignment with this policy.
+15. **Cost Controls:** Never provision billable cloud resources without explicit approval.
 
 

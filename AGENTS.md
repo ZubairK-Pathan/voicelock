@@ -77,22 +77,43 @@ pytest tests/test_database.py -v
 ---
 
 ## 6. Incremental Delivery and GitHub Synchronization Protocol
-For every completed, logically separate increment:
-1. **Implement a small, coherent change.**
-2. **Add or update targeted tests.**
-3. **Run relevant tests and required regression checks.**
-4. **Review the diff and scan for secrets and sensitive data.**
-5. **Update applicable project documentation.**
-6. **Commit using a clear conventional commit message.**
-7. **Push the feature branch to GitHub:**
-   ```bash
-   git push -u origin feature/enterprise-foundation
-   ```
-8. **Verify remote synchronization** (ensure local HEAD matches remote branch commit).
-9. **Report the commit hash, tests, and pushed branch before starting the next increment.**
+This protocol is a permanent requirement for all VoiceLock development sessions to maintain a steady, meaningful GitHub contribution graph.
 
-### Prohibitions & Safeguards:
-- Never commit or push knowingly failing tests, secrets (`firebase-credentials.json`, `.env`), biometric audio recordings, datasets, model caches, or local credentials.
-- Never push directly to `main`, force-push (`--force`), rewrite history, or provision billable cloud resources without explicit approval.
-- If an increment fails: fix it before pushing, or leave the work uncommitted and report why. Do not manufacture artificial commits just to increase contribution counts.
+### Core Workflow Rules:
+1. **Divide into Small Increments:** Break each milestone into small, independently testable increments. Never implement an entire milestone in one enormous batch if it can reasonably be divided.
+2. **Execute Increment Workflow:**
+   a. Implement one coherent piece of functionality.
+   b. Add or update targeted tests covering happy paths, edge cases, and security boundaries.
+   c. Run the targeted tests.
+   d. Run relevant regression checks (`pytest`, `evaluate.py`, `tune_threshold.py`, `predict.py`).
+   e. Review the complete diff.
+   f. Scan for secrets, credentials, `.env` files, biometric audio, datasets, speaker profiles, model caches, and generated artifacts.
+   g. Update applicable project documentation (`PROJECT_STATUS.md`, `CHANGELOG.md`, etc.).
+   h. Create a meaningful conventional commit.
+   i. **PUSH THAT COMMIT TO GITHUB IMMEDIATELY:**
+      ```bash
+      git push -u origin feature/enterprise-foundation
+      ```
+   j. Verify remote synchronization (`git rev-parse HEAD == git rev-parse origin/feature/enterprise-foundation`).
+   k. Report the commit hash and successful push before proceeding.
+3. **No Batching:** Do not wait until the entire milestone is complete to push.
+4. **Strict Sequence:** Do not start the next logical increment until the current increment has been committed, pushed, and verified.
+5. **No Broken Pushes:** If a test fails, fix it before pushing. Never knowingly push a broken increment merely to increase contribution activity.
+6. **Push Failure Diagnostics:** If a push fails, stop and diagnose the issue immediately. Do not silently continue building further increments without publishing the completed one.
+7. **Auth Handling:** If GitHub authentication expires, request completion of the official flow. Never ask the user to paste passwords, OTPs, tokens, or private keys into chat.
+8. **No Artificial Commits:** Never use empty commits, meaningless changes, duplicate commits, or fabricated work to manipulate contribution statistics. Every commit must represent a real, reviewed change.
+9. **Git Safety:** Never push directly to `main`, force-push (`--force`), rewrite history, or discard existing work without explicit authorization.
+10. **Data Hygiene:** Never commit secrets (`firebase-credentials.json`, `.env`), biometric recordings, datasets, or local credentials.
+11. **Compatibility Preservation:** Preserve the working Streamlit reference implementation and do not weaken Firebase authentication or device authentication.
+12. **Start-of-Session Verification:** Verify actual repository state, current branch, local HEAD, remote HEAD, and working-tree status before starting work. Never assume a previous push succeeded without checking.
+13. **End-of-Increment Reporting:** At the end of each increment, provide:
+    - Increment name
+    - Files and functionality changed
+    - Tests executed and results
+    - Commit hash and subject
+    - Remote branch pushed
+    - Confirmation that remote HEAD matches local HEAD
+    - Any remaining issues
+14. **Documentation Synchronization:** Keep `AGENTS.md` and `DEVELOPMENT.md` synchronized with this policy at all times.
+15. **Cost & Infrastructure Safeguards:** Never provision billable cloud resources without explicit approval.
 

@@ -2,7 +2,7 @@
 app/db/__init__.py — Database package exports.
 """
 
-from app.db.base import Base, SchemaInitialization
+from app.db.base import Base, SchemaInitialization, SpeakerRecord
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -18,6 +18,7 @@ from app.db.session import (
 __all__ = [
     "Base",
     "SchemaInitialization",
+    "SpeakerRecord",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",

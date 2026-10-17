@@ -18,12 +18,13 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool, QueuePool
 
 from alembic.config import Config
 from alembic import command
 
-from app.db.base import Base, SchemaInitialization
+from app.db.base import Base, SchemaInitialization, SpeakerRecord
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -205,6 +206,7 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         inspector = inspect(engine)
         tables = inspector.get_table_names()
         assert "schema_initializations" in tables
+        assert "speakers" in tables
         assert "alembic_version" in tables
 
         # Step 2: Verify table operations
@@ -226,9 +228,92 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         inspector_post = inspect(engine_post)
         tables_post = inspector_post.get_table_names()
         assert "schema_initializations" not in tables_post
+        assert "speakers" not in tables_post
         engine_post.dispose()
 
     finally:
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+def test_speakers_schema_migration_and_constraints(monkeypatch):
+    """
+    Verify speakers table creation, constraints, ORM mappings, and single-revision rollback.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Migrate to head
+        command.upgrade(alembic_cfg, "head")
+
+        # 2. Insert valid SpeakerRecord via ORM session
+        with get_db_context() as session:
+            speaker = SpeakerRecord(
+                speaker_id="Zubair",
+                full_name="Zubair K. Pathan",
+                status="active",
+                embedding_dim=192,
+                sample_count=3,
+                metadata_json='{"device": "macbook_pro_m2"}',
+            )
+            session.add(speaker)
+
+        # 3. Query back and verify ORM fields
+        with get_db_context() as session:
+            record = session.scalar(select(SpeakerRecord).where(SpeakerRecord.speaker_id == "Zubair"))
+            assert record is not None
+            assert record.speaker_id == "Zubair"
+            assert record.full_name == "Zubair K. Pathan"
+            assert record.status == "active"
+            assert record.is_active is True
+            assert record.embedding_dim == 192
+            assert record.sample_count == 3
+            assert record.created_at is not None
+            assert record.updated_at is not None
+
+        # 4. Verify unique constraint on speaker_id
+        with pytest.raises(IntegrityError):
+            with get_db_context() as session:
+                duplicate_speaker = SpeakerRecord(
+                    speaker_id="Zubair",
+                    full_name="Duplicate Name",
+                )
+                session.add(duplicate_speaker)
+
+        reset_engine()
+
+        # 5. Rollback only the speakers migration (a4ae5dfd43b3 -> e32dc984b290)
+        command.downgrade(alembic_cfg, "e32dc984b290")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "speakers" not in tables
+        assert "schema_initializations" in tables
+        engine.dispose()
+
+        # 6. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        tables_reup = inspect(engine_reup).get_table_names()
+        assert "speakers" in tables_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
         if tmp_db_path.exists():
             try:
                 tmp_db_path.unlink()

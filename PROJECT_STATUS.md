@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.1 — SQLAlchemy 2.0 and Alembic Database Foundation (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `cdc88c5`, working tree updated with 3C.1 implementation)  
-**Application Run Status:** Fully Operational (All 107 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3C.2a — Speaker Registry Schema & Migration (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `afc79c8`, working tree updated with 3C.2a)  
+**Application Run Status:** Fully Operational (All 108 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.1 establishes the durable database foundation for VoiceLock Enterprise using SQLAlchemy 2.0 and Alembic migration infrastructure. A centralized database module (`app/db/session.py`) provides lazy engine and session factory initialization (ensuring that imports and CLI scripts never initiate unsolicited database connections), robust URL normalization (`postgres://` / `postgresql://` -> `postgresql+psycopg://`), sensitive credential masking (`mask_database_url`), and fail-closed production safety (raising `RuntimeError` if `DATABASE_URL` is missing in production). Production PostgreSQL engines configure `QueuePool` with bounded size, overflow, timeout, 1800s connection recycling, and keepalive `pool_pre_ping=True`, while in-memory SQLite uses `StaticPool`. A foundational declarative base (`Base`) and migration verification entity (`SchemaInitialization`) are established in `app/db/base.py`. Alembic is configured with dynamic database URL resolution (`alembic/env.py`), and the initial migration (`e32dc984b290_create_schema_initializations_table.py`) has been fully validated with complete upgrade and downgrade cycles against disposable test databases. The test suite has expanded to 107 automated tests passing cleanly in 2.60s with zero regressions on Streamlit or SpeechBrain ML workflows.
+Milestone 3C.2a introduces the durable speaker registry schema and migration for VoiceLock Enterprise using SQLAlchemy 2.0 and Alembic. The `SpeakerRecord` entity is established in `app/db/base.py`, defining table `speakers` with primary key, unique indexed `speaker_id` (matching enrolled identifiers such as "Zubair", "Advait", "Omar"), optional full name, lifecycle status (`status="active"`, `is_active` helper), biometric embedding dimensionality (`embedding_dim=192`), enrollment sample count, timezone-aware UTC timestamps, and JSON metadata. Alembic migration `a4ae5dfd43b3_create_speakers_table.py` was created and validated with end-to-end upgrade, unique constraint enforcement, and targeted single-revision rollback. The automated test suite has expanded to 108 tests passing in 2.62s with zero regressions. In parallel, the 15-rule GitHub contribution policy was formally documented in `AGENTS.md` and `DEVELOPMENT.md`.
 
 ---
 
@@ -174,13 +174,29 @@ Milestone 3C.1 establishes the durable database foundation for VoiceLock Enterpr
   - Added 13 dedicated tests covering URL normalization, fail-closed production semantics, password masking, pool configuration, lazy initialization, transaction commit/rollback, FastAPI dependency, and full Alembic upgrade/downgrade lifecycle.
   - Full test suite expanded to 107 passing tests in 2.60s with zero regressions.
 
+### Milestone 3C.2a: Speaker Registry Schema & Migration (Completed)
+- **Declarative Speaker Model (`app/db/base.py`):**
+  - Created `SpeakerRecord` entity mapping table `speakers`.
+  - Defined fields: `id` (PK), `speaker_id` (unique indexed string, matching enrolled identities), `full_name` (optional string), `status` (default="active"), `embedding_dim` (default=192), `sample_count` (default=1), `created_at` / `updated_at` (timezone-aware UTC timestamps), and `metadata_json` (flexible JSON text).
+  - Added `@property is_active` helper.
+  - Re-exported `SpeakerRecord` in `app/db/__init__.py` and `app/core/database.py`.
+- **Alembic Migration (`a4ae5dfd43b3_create_speakers_table.py`):**
+  - Created revision chained to `e32dc984b290`.
+  - Implemented `upgrade()` to generate `speakers` table with constraints and unique index on `speaker_id`.
+  - Implemented `downgrade()` to cleanly drop index and table.
+- **Automated Schema & Lifecycle Tests (`tests/test_database.py`):**
+  - Added `test_speakers_schema_migration_and_constraints` validating migration upgrade, ORM insert and query, unique constraint enforcement on `speaker_id`, single-revision rollback, and re-upgrade.
+  - Expanded test suite to 108 passing tests.
+- **Workflow & Contribution Policy Alignment:**
+  - Formally codified 15-rule incremental commit-and-push policy in `AGENTS.md` and `DEVELOPMENT.md`.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **107/107 tests PASSED in 2.60s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 13 Database) |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **13/13 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic migration cycle) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **108/108 tests PASSED in 2.62s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 14 Database) |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **14/14 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema & rollback) |
 | **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
@@ -207,11 +223,11 @@ Milestone 3C.1 establishes the durable database foundation for VoiceLock Enterpr
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.2: Persistent Speaker Registry & User-to-Speaker Identity Mapping**:
-1. Implement SQLAlchemy 2.0 models and Alembic migrations for speaker profiles and user-to-speaker identity bindings.
-2. Establish repository layer for durable profile metadata while preserving raw 192-d biometric vectors.
-3. Update user authorization checks in `POST /verify` to query persistent identity bindings.
-4. Maintain full regression coverage and verify migrations against disposable test databases.
+Proceed to **Milestone 3C.2b: Speaker Registry Repository & Unit Tests**:
+1. Implement database repository `SpeakerRepository` for CRUD and querying speaker profiles.
+2. Build synchronization helper linking database metadata with `speaker_profiles/profiles.pkl` (without modifying 192-d biometric vectors).
+3. Add unit tests for repository methods against disposable SQLite databases.
+4. Push completed 3C.2b increment to `feature/enterprise-foundation` before proceeding to 3C.2c.
 
 
 

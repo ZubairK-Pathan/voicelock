@@ -10,6 +10,16 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.2a: Speaker Registry Schema and Migration**
+  - Implemented `SpeakerRecord` declarative entity in `app/db/base.py` mapping to `speakers` table:
+    - Primary key, unique indexed `speaker_id` (matching enrolled speaker names), `full_name`, `status` (default="active"), `embedding_dim` (192), `sample_count` (1), timezone-aware UTC timestamps (`created_at`, `updated_at`), and `metadata_json`.
+    - Added `@property is_active` convenience check.
+    - Re-exported `SpeakerRecord` in `app/db/__init__.py` and `app/core/database.py`.
+  - Created Alembic migration `a4ae5dfd43b3_create_speakers_table.py` with upgrade and downgrade logic for the `speakers` table and its unique index.
+  - Added unit test `test_speakers_schema_migration_and_constraints` in `tests/test_database.py` verifying table migration, ORM insert/query, unique constraint violations, and single-revision rollback.
+  - Formally documented the 15-rule VoiceLock GitHub contribution and incremental delivery policy in `AGENTS.md` and `DEVELOPMENT.md`.
+  - Test suite expanded to 108 passing automated tests.
+
 - **Milestone 3C.1: SQLAlchemy 2.0 and Alembic Database Foundation**
   - Implemented centralized database configuration and session management module `app/db/session.py`:
     - Lazy engine and session factory initialization preventing premature connection creation during import or CLI script execution.
