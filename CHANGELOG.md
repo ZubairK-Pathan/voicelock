@@ -10,6 +10,17 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.2b: Speaker Registry Repository and Unit Tests**
+  - Implemented `SpeakerRepository` in `app/repositories/speaker_repository.py` using SQLAlchemy 2.0:
+    - Provides data access operations for `SpeakerRecord`: `create()`, `get_by_speaker_id()`, `get_by_id()`, `get_or_raise()`, `list_speakers()`, `get_active_speaker_ids()`, `update()`, `delete()`, and `count()`.
+    - Input validation on create/update: rejects empty speaker IDs, validates status against allowed set (`active`, `suspended`, `revoked`), enforces positive embedding dimensions and sample counts.
+    - Gracefully handles database unique constraint violations via `DuplicateSpeakerError`.
+    - Predictable missing record handling with `SpeakerNotFoundError`.
+    - Transaction safety: performs session flushes without unexpected auto-commits, preserving caller-owned transactions.
+    - Re-exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+  - Added dedicated unit test suite `tests/test_speaker_repository.py` with 12 tests covering creation, validation, unique constraint enforcement, lookups, active-only listing, pagination, metadata updates, deletion, counting, and caller-controlled rollback on disposable SQLite databases.
+  - Test suite expanded from 108 to 120 passing automated tests.
+
 - **Milestone 3C.2a: Speaker Registry Schema and Migration**
   - Implemented `SpeakerRecord` declarative entity in `app/db/base.py` mapping to `speakers` table:
     - Primary key, unique indexed `speaker_id` (matching enrolled speaker names), `full_name`, `status` (default="active"), `embedding_dim` (192), `sample_count` (1), timezone-aware UTC timestamps (`created_at`, `updated_at`), and `metadata_json`.

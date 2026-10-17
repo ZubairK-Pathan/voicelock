@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.2a — Speaker Registry Schema & Migration (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `afc79c8`, working tree updated with 3C.2a)  
-**Application Run Status:** Fully Operational (All 108 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3C.2b — Speaker Registry Repository & Unit Tests (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `cd27ed9`, working tree updated with 3C.2b)  
+**Application Run Status:** Fully Operational (All 120 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.2a introduces the durable speaker registry schema and migration for VoiceLock Enterprise using SQLAlchemy 2.0 and Alembic. The `SpeakerRecord` entity is established in `app/db/base.py`, defining table `speakers` with primary key, unique indexed `speaker_id` (matching enrolled identifiers such as "Zubair", "Advait", "Omar"), optional full name, lifecycle status (`status="active"`, `is_active` helper), biometric embedding dimensionality (`embedding_dim=192`), enrollment sample count, timezone-aware UTC timestamps, and JSON metadata. Alembic migration `a4ae5dfd43b3_create_speakers_table.py` was created and validated with end-to-end upgrade, unique constraint enforcement, and targeted single-revision rollback. The automated test suite has expanded to 108 tests passing in 2.62s with zero regressions. In parallel, the 15-rule GitHub contribution policy was formally documented in `AGENTS.md` and `DEVELOPMENT.md`.
+Milestone 3C.2b establishes the dedicated repository layer for speaker identity persistence via `SpeakerRepository` in `app/repositories/speaker_repository.py`. Built strictly on SQLAlchemy 2.0 idioms (`select`, `scalar`, `scalars`), the repository cleanly encapsulates all database operations on the `speakers` table while leaving transaction boundaries under the explicit control of the caller (session dependency or context manager) via non-committing `session.flush()` calls. It provides validation and creation (`create`), exact lookups (`get_by_speaker_id`, `get_by_id`), predictable missing record handling (`get_or_raise` with `SpeakerNotFoundError`), list queries with active status filtering and pagination (`list_speakers`, `get_active_speaker_ids`), permitted metadata and lifecycle status updates (`update`), deletion (`delete`), and count metrics (`count`). A dedicated unit test suite (`tests/test_speaker_repository.py`, 12 tests) exercises every operation against disposable SQLite databases, including caller-controlled transaction rollback and unique constraint enforcement (`DuplicateSpeakerError`). Total automated tests have expanded to 120 with zero regressions across baseline API, security, Streamlit, and SpeechBrain workflows.
 
 ---
 
@@ -190,12 +190,43 @@ Milestone 3C.2a introduces the durable speaker registry schema and migration for
 - **Workflow & Contribution Policy Alignment:**
   - Formally codified 15-rule incremental commit-and-push policy in `AGENTS.md` and `DEVELOPMENT.md`.
 
+### Milestone 3C.2b: Speaker Registry Repository & Unit Tests (Completed)
+- **Data Access Repository (`app/repositories/speaker_repository.py`):**
+  - Implemented `SpeakerRepository` using SQLAlchemy 2.0 (`select`, `scalars`, `session.get`, `session.flush`).
+  - Supported operations:
+    - `create()`: Input validation (`speaker_id` non-empty, `status in {"active", "suspended", "revoked"}`, `embedding_dim > 0`, `sample_count >= 1`), constraint enforcement, and automatic handling of `IntegrityError` mapped to `DuplicateSpeakerError`.
+    - `get_by_speaker_id()` and `get_by_id()`: Clean point lookups.
+    - `get_or_raise()`: Predictable missing record handling raising typed `SpeakerNotFoundError`.
+    - `list_speakers()`: Sorted alphabetical listing with optional `active_only` filtering and pagination (`limit`, `offset`).
+    - `get_active_speaker_ids()`: Fast lookup of active speaker strings for biometric validation pipelines.
+    - `update()`: Modifies permitted metadata, updates lifecycle status, advances `updated_at`, and validates inputs.
+    - `delete()`: Deletes record and returns boolean success.
+    - `count()`: Aggregates total or active speaker counts via SQL `func.count`.
+  - Transaction safety: operations use `session.flush()` without calling `session.commit()`, ensuring transaction ownership remains strictly with the caller (FastAPI dependency or context manager).
+  - Package re-exports: exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+- **Dedicated Unit Test Suite (`tests/test_speaker_repository.py`):**
+  - Added 12 comprehensive unit tests using isolated disposable SQLite databases:
+    - Non-null session requirement.
+    - Happy path creation and field verification.
+    - Input validation on create (empty ID, invalid status, invalid dimensions).
+    - Unique constraint rejection (`DuplicateSpeakerError`).
+    - Query by string ID and integer primary key.
+    - Predictable not-found behavior (`None` vs `SpeakerNotFoundError`).
+    - Listing, alphabetical ordering, active-only filtering, and pagination.
+    - Metadata and status updates with `updated_at` advancement.
+    - Invalid status updates rejected.
+    - Record deletion and post-deletion lookup.
+    - Total and active count aggregations.
+    - Explicit transaction boundary verification (caller rollback drops uncommitted repo changes).
+  - Expanded total automated test suite from 108 to 120 passing tests.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **108/108 tests PASSED in 2.62s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 14 Database) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **120/120 tests PASSED in 2.67s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 14 Database + 12 Speaker Repository) |
+| **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, active filters, validation, duplicate rejection, rollback) |
 | **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **14/14 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema & rollback) |
 | **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
@@ -211,7 +242,7 @@ Milestone 3C.2a introduces the durable speaker registry schema and migration for
 ## 4. Known Issues & Remaining Security Risks
 1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.2–3C.4).
+   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3–3C.4).
 2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
 3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
@@ -223,11 +254,11 @@ Milestone 3C.2a introduces the durable speaker registry schema and migration for
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.2b: Speaker Registry Repository & Unit Tests**:
-1. Implement database repository `SpeakerRepository` for CRUD and querying speaker profiles.
-2. Build synchronization helper linking database metadata with `speaker_profiles/profiles.pkl` (without modifying 192-d biometric vectors).
-3. Add unit tests for repository methods against disposable SQLite databases.
-4. Push completed 3C.2b increment to `feature/enterprise-foundation` before proceeding to 3C.2c.
+Proceed to **Milestone 3C.2c: User-to-Speaker Identity Mapping & Authorization Tests**:
+1. Implement SQLAlchemy 2.0 model and Alembic migration for user accounts and persistent user-to-speaker identity bindings.
+2. Update user authorization checks in `POST /verify` to query persistent identity bindings from the database.
+3. Add unit and integration tests verifying that users can verify only their bound speaker profile while admins can verify any profile.
+4. Maintain full regression coverage and verify migrations against disposable test databases.
 
 
 

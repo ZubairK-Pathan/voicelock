@@ -3,6 +3,12 @@ app/db/__init__.py — Database package exports.
 """
 
 from app.db.base import Base, SchemaInitialization, SpeakerRecord
+from app.repositories.speaker_repository import (
+    SpeakerRepository,
+    SpeakerRepositoryError,
+    DuplicateSpeakerError,
+    SpeakerNotFoundError,
+)
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -19,6 +25,10 @@ __all__ = [
     "Base",
     "SchemaInitialization",
     "SpeakerRecord",
+    "SpeakerRepository",
+    "SpeakerRepositoryError",
+    "DuplicateSpeakerError",
+    "SpeakerNotFoundError",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",
