@@ -60,6 +60,12 @@ class RequestSizeLimiterMiddleware:
         if content_length_str:
             try:
                 declared_length = int(content_length_str.strip())
+                if declared_length < 0:
+                    response = JSONResponse(
+                        status_code=400,
+                        content={"detail": "Invalid Content-Length header: negative length is not permitted."},
+                    )
+                    return await response(scope, receive, send)
                 if declared_length > max_bytes:
                     response = JSONResponse(
                         status_code=413,

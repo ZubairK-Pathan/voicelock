@@ -33,6 +33,7 @@ Verifies:
 import hashlib
 import hmac
 import io
+import json
 import os
 import secrets
 import time
@@ -445,3 +446,96 @@ def test_websocket_frame_limit_enforced():
             ws.send_bytes(dummy_wav)
             err = ws.receive_json()
             assert "Session frame limit exceeded" in err["error"]
+
+
+# ─── 8. Security Review Regression Tests ──────────────────────────────────────
+
+def test_invalid_signature_does_not_burn_nonce():
+    """
+    Vulnerability Regression: An invalid HMAC signature must NOT burn or consume
+    the provided nonce. The legitimate client must be able to send with that nonce.
+    """
+    clean_nonce = secrets.token_hex(16)
+    payload = {"claimed_identity": "Zubair"}
+    body_bytes = json.dumps(payload).encode()
+
+    # 1. Send invalid signature with fresh nonce
+    headers_bad = make_hmac_headers(
+        nonce=clean_nonce,
+        body=body_bytes,
+    )
+    headers_bad["X-Device-Signature"] = "0" * 64  # Corrupt the signature
+    headers_bad["Content-Type"] = "application/json"
+    resp1 = client.post("/challenge", content=body_bytes, headers=headers_bad)
+    assert resp1.status_code == 401
+    assert "Invalid HMAC device signature" in resp1.json()["detail"]
+
+    # 2. Now send valid signature with the SAME nonce — it MUST succeed!
+    headers_good = make_hmac_headers(
+        nonce=clean_nonce,
+        body=body_bytes,
+    )
+    headers_good["Content-Type"] = "application/json"
+    resp2 = client.post("/challenge", content=body_bytes, headers=headers_good)
+    assert resp2.status_code == 200
+    assert "challenge_id" in resp2.json()
+
+
+def test_duplicate_device_headers_rejected_400():
+    """Verify duplicate headers (header smuggling prevention) are rejected with 400."""
+    payload = {"claimed_identity": "Zubair"}
+    body_bytes = json.dumps(payload).encode()
+    headers = make_hmac_headers(body=body_bytes)
+    # Inject duplicate X-Device-ID header as tuple list
+    raw_headers = list(headers.items()) + [("X-Device-ID", "esp32-portal-north-01"), ("Content-Type", "application/json")]
+
+    resp = client.post("/challenge", content=body_bytes, headers=raw_headers)
+    assert resp.status_code == 400
+    assert "Duplicate 'X-Device-ID' headers are strictly prohibited" in resp.json()["detail"]
+
+
+def test_device_key_disabled_when_configured_false_403():
+    """Verify static X-Device-Key fallback is rejected with 403 when disabled."""
+    with patch.dict(os.environ, {"VOICELOCK_ENABLE_DEVICE_KEY_FALLBACK": "false"}):
+        resp = client.post(
+            "/challenge",
+            json={"claimed_identity": "Zubair"},
+            headers={
+                "X-Device-ID": TEST_DEVICE_ID,
+                "X-Device-Key": TEST_DEVICE_SECRET,
+            },
+        )
+        assert resp.status_code == 403
+        assert "Static X-Device-Key authentication is disabled" in resp.json()["detail"]
+
+
+def test_negative_content_length_rejected_400():
+    """Verify negative Content-Length header is rejected with 400."""
+    resp = client.post(
+        "/challenge",
+        content=b'{"claimed_identity": "Zubair"}',
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": "-5",
+        },
+    )
+    assert resp.status_code == 400
+    assert "negative length is not permitted" in resp.json()["detail"]
+
+
+def test_websocket_session_duration_limit_enforced():
+    """Verify WebSocket terminates with code 1008 if session duration exceeds 300s."""
+    admin_token = "test-token-admin-valid"
+    with client.websocket_connect("/ws/identify") as ws:
+        # Initial auth handshake
+        ws.send_json({"type": "auth", "token": admin_token})
+        resp = ws.receive_json()
+        assert resp["type"] == "auth_ok"
+
+        dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+        # Advance time by 305 seconds
+        with patch("app.api.routes_verification.time.time", return_value=time.time() + 350.0):
+            ws.send_bytes(dummy_wav)
+            err = ws.receive_json()
+            assert "Session duration limit exceeded" in err["error"]
+

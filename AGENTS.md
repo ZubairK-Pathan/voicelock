@@ -64,3 +64,26 @@ streamlit run app.py
 # Run FastAPI server
 uvicorn cloud_api:app --host 0.0.0.0 --port 8000
 ```
+
+---
+
+## 6. Incremental Delivery and GitHub Synchronization Protocol
+For every completed, logically separate increment:
+1. **Implement a small, coherent change.**
+2. **Add or update targeted tests.**
+3. **Run relevant tests and required regression checks.**
+4. **Review the diff and scan for secrets and sensitive data.**
+5. **Update applicable project documentation.**
+6. **Commit using a clear conventional commit message.**
+7. **Push the feature branch to GitHub:**
+   ```bash
+   git push -u origin feature/enterprise-foundation
+   ```
+8. **Verify remote synchronization** (ensure local HEAD matches remote branch commit).
+9. **Report the commit hash, tests, and pushed branch before starting the next increment.**
+
+### Prohibitions & Safeguards:
+- Never commit or push knowingly failing tests, secrets (`firebase-credentials.json`, `.env`), biometric audio recordings, datasets, model caches, or local credentials.
+- Never push directly to `main`, force-push (`--force`), rewrite history, or provision billable cloud resources without explicit approval.
+- If an increment fails: fix it before pushing, or leave the work uncommitted and report why. Do not manufacture artificial commits just to increase contribution counts.
+

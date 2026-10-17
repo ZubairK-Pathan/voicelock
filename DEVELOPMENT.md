@@ -100,5 +100,28 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
   - Raw body stream inspection rejects payloads > 10MB + 64KB for uploads and > 1MB for non-upload endpoints prior to multipart parsing.
 - **Rate Limiting:**
   - Enforced via sliding-window `InMemoryRateLimiter` on `/challenge` (30/min), `/verify` (30/min), and `/identify` (15/min).
-  - Biometric inference concurrency is bounded to 4 parallel slots. WebSocket sessions are capped at 100 frames.
+  - Biometric inference concurrency is bounded to 4 parallel slots. WebSocket sessions are capped at 100 frames and 300 seconds maximum duration.
+
+---
+
+## 8. Incremental Delivery & GitHub Synchronization Policy
+VoiceLock follows a strict incremental commit-and-push workflow for every completed task:
+1. **Implement a small, coherent change.**
+2. **Add or update targeted tests** covering happy paths, edge cases, and security boundaries.
+3. **Run relevant tests and required regression checks** (`pytest`, `evaluate.py`, `tune_threshold.py`, `predict.py`).
+4. **Review the diff and scan for secrets** (`firebase-credentials.json`, `.env`), biometric audio recordings, datasets, model caches, and generated artifacts.
+5. **Update applicable project documentation** (`PROJECT_STATUS.md`, `CHANGELOG.md`, `SECURITY.md`, etc.).
+6. **Commit using a clear conventional commit message.**
+7. **Push the feature branch to GitHub:**
+   ```bash
+   git push -u origin feature/enterprise-foundation
+   ```
+8. **Verify remote synchronization** (ensure local HEAD matches remote branch commit).
+9. **Report the commit hash, tests, and pushed branch before starting the next increment.**
+
+**Safeguards:**
+- Never push directly to `main`.
+- Never force-push or rewrite published Git history.
+- Never commit credentials, private keys, or biometric datasets.
+
 

@@ -35,9 +35,15 @@ and this project adheres to Semantic Versioning.
     - Thread-safe in-memory sliding window rate limiter (`InMemoryRateLimiter`) with automatic timestamp pruning.
     - Applied to `POST /challenge` (30 req/min), `POST /verify` (10 req/min), `POST /identify` (10 req/min).
     - Rejection with HTTP 429 and RFC 7231 `Retry-After` header.
-    - Concurrency semaphore (`MAX_CONCURRENT_INFERENCES = 4`) bounding simultaneous SpeechBrain ECAPA-TDNN feature extractions to prevent thread pool exhaustion and CPU starvation.
     - WebSocket streaming frame ceiling (maximum 100 frames/session) closing abusive streaming connections with WS close code 1008 (Policy Violation).
-  - Expanded automated test suite with 25 comprehensive tests in `tests/test_device_auth.py`, bringing total suite to 89 passing tests.
+  - Post-Milestone 3B.2 Security Hardening & Implementation Review:
+    - **Nonce Ordering Correction:** Enforced signature verification BEFORE nonce recording, preventing unauthenticated clients from burning nonces or polluting server state.
+    - **Header Ambiguity Defense:** Added strict duplicate header rejection (HTTP 400) for `X-Device-ID`, `X-Device-Signature`, `X-Device-Key`, `X-Device-Timestamp`, and `X-Device-Nonce` to mitigate header smuggling.
+    - **Device Key Fallback Guard:** Added `VOICELOCK_ENABLE_DEVICE_KEY_FALLBACK` configuration setting; static keys are strictly rejected with HTTP 403 in production.
+    - **Negative Content-Length Defense:** Added upfront rejection for negative declared `Content-Length` headers in `RequestSizeLimiterMiddleware` (HTTP 400).
+    - **WebSocket Session Duration Limit:** Enforced 300-second maximum lifetime ceiling on WebSocket identification sessions, disconnecting long-running connections with code 1008.
+    - **Established Incremental Delivery Policy:** Updated `AGENTS.md` and `DEVELOPMENT.md` establishing a formal 9-step commit-and-push workflow for every completed milestone increment.
+  - Expanded automated test suite with 30 comprehensive tests in `tests/test_device_auth.py`, bringing total suite to 94 passing tests.
 
 - Implemented server-side Firebase ID-token verification module `app/core/auth.py` using `firebase-admin` (v7.7.0):
   - Single-instance lifecycle initialization (`get_firebase_app`) with ADC and service account support.

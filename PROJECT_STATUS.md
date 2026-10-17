@@ -1,14 +1,23 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3B.2 — IoT Device Authentication, Request-Body Protection, CORS, and Rate Limiting (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `3636c1e`, working tree updated with 3B.2 implementation)  
-**Application Run Status:** Fully Operational (All 89 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3B.2 — IoT Device Authentication, Request-Body Protection, CORS, Rate Limiting & Post-Review Hardening (Completed & Verified)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `7172928`, working tree updated with review fixes)  
+**Application Run Status:** Fully Operational (All 94 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3B.2 has comprehensively hardened the FastAPI service against IoT device spoofing, replay attacks, multipart buffer exhaustion, CORS vulnerabilities, and compute engine saturation. It introduces a separate IoT device authentication dependency (`get_current_device`) supporting dual schemes: a replay-resistant HMAC-SHA256 signature protocol (`X-Device-Signature`, `X-Device-Timestamp`, `X-Device-Nonce`) backed by a thread-safe sliding window `InMemoryNonceStore` and 300s clock drift window, as well as a pre-shared key fallback (`X-Device-Key`) over HTTPS with documented trade-offs. Devices are strictly assigned `Role.DEVICE` and never granted `Role.ADMIN`. An ASGI-level `RequestSizeLimiterMiddleware` inspects raw streaming chunks on-the-fly (`limited_receive`), rejecting payloads exceeding ceilings (10MB + 64KB for uploads, 1MB for non-uploads) with HTTP 413 prior to Starlette multipart disk buffering. Permissive CORS wildcards were replaced by explicit `load_allowed_cors_origins()`, rejecting `*` when credentials are enabled. Process-local sliding window rate limiting (`InMemoryRateLimiter`) protects `/challenge` (30 req/min), `/verify` (30 req/min), and `/identify` (15 req/min), while a concurrency semaphore limits parallel SpeechBrain feature extractions to 4 slots and WebSocket streaming sessions are capped at 100 frames. Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom claims for admin privileges) and B (binding ordinary user verification strictly to their own enrolled voiceprint) have been fully enforced. The test suite has expanded to 89 passing automated tests with zero regressions on Streamlit or SpeechBrain ML workflows.
+Milestone 3B.2 has comprehensively hardened the FastAPI service against IoT device spoofing, replay attacks, multipart buffer exhaustion, CORS vulnerabilities, and compute engine saturation. It introduces a separate IoT device authentication dependency (`get_current_device`) supporting dual schemes: a replay-resistant HMAC-SHA256 signature protocol (`X-Device-Signature`, `X-Device-Timestamp`, `X-Device-Nonce`) backed by a thread-safe sliding window `InMemoryNonceStore` and 300s clock drift window, as well as a pre-shared key fallback (`X-Device-Key`) over HTTPS with documented trade-offs. 
+
+Following a rigorous post-implementation security review, five additional defenses were added and verified:
+1. **Nonce Ordering Correction:** Constant-time HMAC signature verification precedes nonce recording, preventing unauthenticated clients from burning nonces.
+2. **Duplicate Header Rejection:** Strict 400 rejection for duplicate device headers mitigating HTTP smuggling.
+3. **Configurable Key Fallback:** Static `X-Device-Key` is strictly disabled by default in production (`VOICELOCK_ENABLE_DEVICE_KEY_FALLBACK`).
+4. **Negative Content-Length Defense:** Malformed negative lengths rejected upfront (HTTP 400).
+5. **WebSocket Session Lifetime Ceiling:** Capped at 300 seconds (disconnecting with WS 1008).
+
+Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom claims for admin privileges) and B (binding ordinary user verification strictly to their own enrolled voiceprint) have been fully enforced. The test suite has expanded to 94 passing automated tests with zero regressions on Streamlit or SpeechBrain ML workflows. A permanent incremental commit-and-push policy has been codified in `AGENTS.md` and `DEVELOPMENT.md`.
 
 ---
 

@@ -35,6 +35,7 @@ from app.core.config import (
     VOICELOCK_ENV,
     MAX_TIMESTAMP_DRIFT_SECONDS,
     load_device_registry,
+    load_device_key_fallback_enabled,
 )
 from app.core.auth_policy import Role
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -143,7 +144,15 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
                 detail="HTTPS is strictly required for IoT device authentication.",
             )
 
-    # 3. Read Device ID
+    # 3. Prevent HTTP header ambiguity / smuggling via duplicate device headers
+    for hdr in ("X-Device-ID", "X-Device-Signature", "X-Device-Key", "X-Device-Timestamp", "X-Device-Nonce"):
+        if len(request.headers.getlist(hdr)) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate '{hdr}' headers are strictly prohibited.",
+            )
+
+    # 4. Read Device ID
     device_id = request.headers.get("X-Device-ID")
     if not device_id or not device_id.strip():
         raise HTTPException(
@@ -152,7 +161,7 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
         )
     device_id = device_id.strip()
 
-    # 4. Lookup device in registry (Fail closed if registry empty or missing)
+    # 5. Lookup device in registry (Fail closed if registry empty or missing)
     registry = get_device_registry()
     if not registry:
         raise HTTPException(
@@ -173,7 +182,7 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
     device_secret = str(device_entry.get("secret", ""))
     device_name = device_entry.get("name", device_id)
 
-    # 5. Check Scheme A: Replay-Resistant HMAC-SHA256
+    # 6. Check Scheme A: Replay-Resistant HMAC-SHA256
     sig_header = request.headers.get("X-Device-Signature")
     if sig_header:
         ts_header = request.headers.get("X-Device-Timestamp")
@@ -198,17 +207,10 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
                 detail="Request timestamp outside acceptable tolerance window (clock skew / stale request).",
             )
 
-        # Validate nonce freshness (anti-replay)
+        # Validate nonce formatting
         clean_nonce = nonce_header.strip()
         if len(clean_nonce) < 8:
             raise HTTPException(status_code=400, detail="X-Device-Nonce must be at least 8 characters.")
-
-        nonce_store = get_nonce_store()
-        if not nonce_store.validate_and_record(device_id, clean_nonce, now=now):
-            raise HTTPException(
-                status_code=401,
-                detail="Replay attack detected: X-Device-Nonce has already been consumed.",
-            )
 
         # Read raw request body hash
         raw_body = await request.body()
@@ -225,8 +227,18 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
             hashlib.sha256,
         ).hexdigest()
 
+        # Constant-time signature verification MUST precede nonce recording.
+        # This prevents unauthenticated attackers from prematurely burning legitimate nonces.
         if not hmac.compare_digest(sig_header.strip(), expected_sig):
             raise HTTPException(status_code=401, detail="Invalid HMAC device signature.")
+
+        # Atomic nonce registration: only executed after proving possession of secret key
+        nonce_store = get_nonce_store()
+        if not nonce_store.validate_and_record(device_id, clean_nonce, now=now):
+            raise HTTPException(
+                status_code=401,
+                detail="Replay attack detected: X-Device-Nonce has already been consumed.",
+            )
 
         return AuthenticatedDevice(
             device_id=device_id,
@@ -235,9 +247,15 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
             auth_scheme="hmac_sha256",
         )
 
-    # 6. Check Scheme B: Pre-Shared Key (X-Device-Key)
+    # 7. Check Scheme B: Pre-Shared Key (X-Device-Key)
     key_header = request.headers.get("X-Device-Key")
     if key_header:
+        if not load_device_key_fallback_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail="Static X-Device-Key authentication is disabled in this environment. Replay-resistant HMAC authentication is required.",
+            )
+
         if not hmac.compare_digest(key_header.strip(), device_secret):
             raise HTTPException(status_code=401, detail="Invalid device key.")
 

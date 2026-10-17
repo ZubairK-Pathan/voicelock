@@ -114,6 +114,21 @@ def load_allowed_cors_origins() -> list[str]:
 MAX_TIMESTAMP_DRIFT_SECONDS = 300  # 5 minutes tolerance window for HMAC timestamps
 MAX_CONCURRENT_INFERENCES = 4      # Prevent CPU core starvation from parallel ECAPA-TDNN feature extractions
 
+def load_device_key_fallback_enabled() -> bool:
+    """
+    Control whether static X-Device-Key authentication fallback is permitted.
+    Defaults to True in development/testing, strictly False in production.
+    """
+    current_env = os.getenv("VOICELOCK_ENV", VOICELOCK_ENV).strip().lower()
+    raw = os.getenv("VOICELOCK_ENABLE_DEVICE_KEY_FALLBACK")
+    if raw is not None:
+        return raw.strip().lower() in ("true", "1", "yes")
+    return current_env != "production"
+
+
+ENABLE_DEVICE_KEY_FALLBACK = load_device_key_fallback_enabled()
+
+
 def load_device_registry() -> dict[str, dict]:
     """
     Load registered hardware devices from environment variable DEVICE_REGISTRY_JSON.
@@ -130,4 +145,6 @@ def load_device_registry() -> dict[str, dict]:
     except Exception:
         pass
     return {}
+
+
 

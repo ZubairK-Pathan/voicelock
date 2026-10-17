@@ -5,6 +5,7 @@ app/api/routes_verification.py — Biometric identification, verification, and s
 import io
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -273,10 +274,17 @@ async def ws_identify(websocket: WebSocket):
 
     frame_count = 0
     max_frames = 100
+    session_start_time = time.time()
+    max_session_seconds = 300.0
 
     try:
         while True:
             audio_bytes = await websocket.receive_bytes()
+            if time.time() - session_start_time > max_session_seconds:
+                await websocket.send_json({"error": "Session duration limit exceeded (max 300s)."})
+                await websocket.close(code=1008)
+                break
+
             frame_count += 1
             if frame_count > max_frames:
                 await websocket.send_json({"error": "Session frame limit exceeded (max 100 frames)."})
