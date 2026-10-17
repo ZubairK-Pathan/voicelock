@@ -50,11 +50,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ## 4. Running Tests & Baseline Verification
 
 ```bash
-# Run full automated test suite (35 tests)
+# Run full automated test suite (89 tests)
 pytest -v
 
-# Run targeted test
-pytest tests/test_api.py -k test_verify_real_audio_success
+# Run targeted test suites
+pytest tests/test_api.py -v          # Baseline API contracts and upload limits (35 tests)
+pytest tests/test_auth.py -v         # Firebase Auth, RBAC, and WebSocket security (22 tests)
+pytest tests/test_auth_policy.py -v  # Policy matrix and identity separation (7 tests)
+pytest tests/test_device_auth.py -v  # IoT HMAC, ASGI limiter, CORS, rate limits (25 tests)
 ```
 
 ## 5. Running ML Scripts & Baseline Evaluation
@@ -75,18 +78,27 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
 ---
 
 ## 6. Coding Standards & Safety
-- **No Mock Predictions in Production:** Always route real inference through `predict_speaker` / `verify_speaker`.
+- **No Mock Predictions in Production Paths:** Always route real biometric workflows through `predict_speaker` / `verify_speaker`.
 - **Preserve Error Handling:** Do not call `sys.exit()` in code imported by web frameworks; raise custom exceptions instead.
 - **Never Hardcode Secrets:** Use `.env` and environment variables. Verify changes with `git status` and `git diff` before committing.
+- **Fail-Closed Principle:** Startup and authentication checks fail safely on missing or invalid configuration.
 
 ---
 
-## 7. Authentication Architecture & Testing Guidelines
-- **Identity Separation:** Never treat a Firebase User ID (`uid`) as a speaker voiceprint name, and never treat a caller-supplied `session_id` or `device_id` as proof of identity.
-- **Declarative Access Policy:** Endpoint permissions and authentication schemes are defined declaratively in `app/core/auth_policy.py`.
-- **Testing Auth Policies:**
-  ```bash
-  pytest tests/test_auth_policy.py -v
-  ```
-- **Local Development Security Notice:** The existing API endpoints currently operate unauthenticated for local development and smoke-testing. They MUST NOT be deployed publicly or exposed to unvetted networks until Milestone 3B (Firebase Auth & Device Token Verification) is implemented.
+## 7. IoT Device & Web Authentication Testing Guidelines
+- **Identity Separation:** Never treat a Firebase User ID (`uid`) as a speaker voiceprint name, and never treat an IoT `device_id` as proof of identity without cryptographic authentication.
+- **Testing IoT Device Authentication:**
+  - Devices authenticate using either:
+    1. Replay-resistant HMAC-SHA256 headers (`X-Device-ID`, `X-Device-Timestamp`, `X-Device-Nonce`, `X-Device-Signature`).
+    2. Pre-shared secret key (`X-Device-Key`).
+  - Device test registry can be injected outside production via `set_test_device_registry({"esp32-portal": {"secret": "...", "name": "..."}})`.
+- **CORS Configuration:**
+  - Configured via `ALLOWED_CORS_ORIGINS` (comma-separated origins).
+  - Defaults to local development ports (3000, 5173, 8501).
+  - Wildcard `*` with credentials enabled is strictly prohibited.
+- **ASGI Stream Limiter:**
+  - Raw body stream inspection rejects payloads > 10MB + 64KB for uploads and > 1MB for non-upload endpoints prior to multipart parsing.
+- **Rate Limiting:**
+  - Enforced via sliding-window `InMemoryRateLimiter` on `/challenge` (30/min), `/verify` (30/min), and `/identify` (15/min).
+  - Biometric inference concurrency is bounded to 4 parallel slots. WebSocket sessions are capped at 100 frames.
 

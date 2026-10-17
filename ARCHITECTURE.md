@@ -59,10 +59,15 @@ Voice Recognition/
 ├── audio_utils.py             # Audio normalization and voiceprint serialization
 ├── app/                       # Modular FastAPI application package
 │   ├── __init__.py            # Exports `app` and `create_app`
-│   ├── main.py                # Application factory and lifespan handler
+│   ├── main.py                # Application factory, lifespan, CORS, and size limiter middleware
 │   ├── core/
-│   │   ├── config.py          # Centralized configuration (SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES)
-│   │   └── errors.py          # HTTP exception helpers
+│   │   ├── config.py          # Centralized configuration (thresholds, origins, device registry)
+│   │   ├── errors.py          # HTTP exception helpers
+│   │   ├── auth_policy.py     # Declarative RBAC permissions and endpoint matrix
+│   │   ├── auth.py            # Firebase ID-token verification and role resolution
+│   │   ├── device_auth.py     # IoT HMAC-SHA256 signature scheme, nonce store, and actor resolution
+│   │   ├── middleware.py      # ASGI request-body streaming size limiter (terminates oversized payloads)
+│   │   └── rate_limit.py      # In-memory sliding-window limiter & inference concurrency semaphore
 │   ├── schemas/
 │   │   ├── challenge.py       # Pydantic models for challenge request/response
 │   │   └── verification.py    # Pydantic models for identify, verify, speakers, and health
@@ -77,7 +82,10 @@ Voice Recognition/
 │       ├── routes_challenges.py # POST /challenge
 │       └── routes_verification.py # POST /identify, POST /verify, WS /ws/identify
 └── tests/
-    └── test_api.py            # Comprehensive 35-test automated test suite
+    ├── test_api.py            # 35-test baseline API contract and upload security suite
+    ├── test_auth.py           # 22-test Firebase authentication, RBAC, and WebSocket suite
+    ├── test_auth_policy.py    # 7-test identity separation and policy unit tests
+    └── test_device_auth.py    # 25-test IoT device HMAC, ASGI limiter, CORS, and rate limit suite
 ```
 
 ### Module Responsibilities & Lifecycle Guarantees
@@ -160,14 +168,14 @@ To eliminate privilege escalation, identity confusion, and spoofing vulnerabilit
 
 ## 6. Role-Based Access Control (RBAC) & Endpoint Matrix
 
-| Endpoint | Method | Auth Scheme | Required Permissions | Allowed Roles | Security Rationale |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `GET /` | GET | `Public` | `health:read` | `Anonymous`, `User`, `Device`, `Admin` | System health and load balancer discovery. Exposes only online status; hides thresholds and counts. |
-| `GET /speakers` | GET | `FirebaseJWT` | `speakers:list` | `Admin` | Directory listing. Restricted to prevent employee enumeration and targeted biometric harvesting. |
-| `POST /challenge` | POST | `Either` (JWT or DeviceKey) | `challenge:create` | `Device`, `User`, `Admin` | Challenge digit generation. Requires authenticated caller to prevent in-memory store flooding. |
-| `POST /verify` | POST | `Either` (JWT or DeviceKey) | `verify:biometric` | `Device`, `User`, `Admin` | 1-to-1 door access verification. Early invalidation enforces single-attempt consumption before audio I/O. |
-| `POST /identify` | POST | `FirebaseJWT` | `identify:biometric` | `Admin` | 1-to-N unconstrained speaker identification. Restricted to Admin due to biometric probing risk. |
-| `WS /ws/identify` | WS | `FirebaseJWT` | `identify:biometric` | `Admin` | Real-time streaming identification. Restricted to Admin with connection and frame limits. |
+| Endpoint | Method | Auth Scheme | Rate Limit | Stream Limit | Allowed Roles | Security Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `GET /` | GET | `Public` | Unbounded | 1 MB | `Anonymous`, `User`, `Device`, `Admin` | System health and load balancer discovery. Exposes only online status; hides thresholds and counts. |
+| `GET /speakers` | GET | `FirebaseJWT` | Unbounded | 1 MB | `Admin` | Directory listing. Restricted to prevent employee enumeration and targeted biometric harvesting. |
+| `POST /challenge` | POST | `Either` (JWT or Device) | 30 req/min | 1 MB | `Device`, `User`, `Admin` | Challenge digit generation. Ordinary users can only challenge their own voice identity; devices can challenge for door access. |
+| `POST /verify` | POST | `Either` (JWT or Device) | 30 req/min | 10 MB + 64KB | `Device`, `User`, `Admin` | 1-to-1 door access verification. Concurrency-bounded (max 4). Ordinary users restricted to self-verification. |
+| `POST /identify` | POST | `FirebaseJWT` | 15 req/min | 10 MB + 64KB | `Admin` | 1-to-N unconstrained speaker identification. Concurrency-bounded (max 4). Restricted to Admin due to biometric probing risk. |
+| `WS /ws/identify` | WS | `FirebaseJWT` | 100 frames/sess | 10 MB frame | `Admin` | Real-time streaming identification. Restricted to Admin with upfront handshake, frame ceilings, and inference semaphore. |
 
 ---
 
@@ -182,29 +190,51 @@ To eliminate privilege escalation, identity confusion, and spoofing vulnerabilit
        ▼ (3. HTTP Request with Authorization: Bearer <ID_TOKEN>)
 [FastAPI Backend]
        ├── (4. Verify Signature via Firebase Admin SDK & Google JWKS)
-       ├── (5. Extract UID and Custom Role Claims: admin/user)
-       └── (6. Authorize Route via app/core/auth_policy.py)
+       ├── (5. Extract UID; check server bootstrap ADMIN_EMAILS/ADMIN_UIDS)
+       └── (6. Authorize Route via app/core/auth_policy.py & resolve_user_voice_identity)
 ```
 
-### ESP32 Device Terminal Flow:
+### ESP32 Device Terminal Flow (Replay-Resistant HMAC-SHA256 Scheme):
 ```
 [ESP32 Hardware Terminal]
        │
-       ▼ (1. POST /challenge with X-Device-ID: dev_front_door_01, X-Device-Key: <TOKEN>)
+       ▼ (1. POST /challenge with X-Device-ID, X-Device-Timestamp, X-Device-Nonce, X-Device-Signature)
 [FastAPI Backend]
-       ├── (2. Validate Device Key against hashed device registry)
-       ├── (3. Issue 3-digit CSPRNG challenge bound to device_id & session_id)
-       └── (4. Return challenge digits & 60s TTL)
+       ├── (2. Validate timestamp within 300s window & verify nonce freshness via InMemoryNonceStore)
+       ├── (3. Validate HMAC-SHA256 signature in constant time against device secret)
+       ├── (4. Issue 3-digit CSPRNG challenge bound to device_id & session_id)
+       └── (5. Return challenge digits & 60s TTL)
 [ESP32 Hardware Terminal]
-       ├── (5. Prompt user: "Speak digits: 4 8 2")
-       ├── (6. Record audio from I2S microphone)
-       ▼ (7. POST /verify with audio, challenge_id, session_id, claimed_identity, X-Device-Key)
+       ├── (6. Prompt user on OLED display: "Speak digits: 4 8 2")
+       ├── (7. Record audio from I2S microphone)
+       ▼ (8. POST /verify with audio, challenge_id, session_id, claimed_identity, & HMAC headers)
 [FastAPI Backend]
-       ├── (8. Validate Device Key & atomically consume challenge BEFORE upload spooling)
-       ├── (9. Run Vosk spoken digit liveness check; fail closed on mismatch)
-       ├── (10. Run SpeechBrain ECAPA-TDNN 1-to-1 verification against claimed_identity)
-       └── (11. Return JSON decision: {"accepted": true, "action": "UNLOCK", ...})
+       ├── (9. Validate HMAC signature, timestamp, and nonce)
+       ├── (10. Enforce ASGI streaming byte ceiling prior to multipart disk spooling)
+       ├── (11. Validate Device & atomically consume challenge BEFORE upload spooling)
+       ├── (12. Run Vosk spoken digit liveness check; fail closed on mismatch)
+       ├── (13. Acquire inference concurrency slot [1 of 4])
+       ├── (14. Run SpeechBrain ECAPA-TDNN 1-to-1 verification against claimed_identity)
+       └── (15. Release inference slot; return JSON decision: {"accepted": true, "action": "UNLOCK", ...})
 [ESP32 Hardware Terminal]
-       └── (12. Trigger physical door relay if action == "UNLOCK")
+       └── (16. Trigger physical door relay if action == "UNLOCK")
 ```
+
+---
+
+## 8. ASGI Request-Body Streaming Protection Architecture (`app/core/middleware.py`)
+
+Starlette’s default `MultiPartParser` buffers incoming uploads in memory and spools excess chunks to disk *before* endpoint routing dependencies execute. To prevent resource exhaustion:
+1. **Pre-check Inspection:** Fast check on `Content-Length`. If declared length exceeds route limit, connection returns HTTP 413 immediately.
+2. **Raw Stream Limiter:** Wraps ASGI `receive` callable with `limited_receive`. Counts cumulative bytes on-the-fly and raises `PayloadTooLargeError` as soon as chunks cross the ceiling (10 MB + 64 KB for uploads, 1 MB for standard endpoints).
+3. **Downstream Safety:** Body chunks pass through transparently to downstream Starlette multipart parsing without double-buffering or memory accumulation.
+
+---
+
+## 9. Rate Limiting & Resource Protection Architecture (`app/core/rate_limit.py`)
+
+1. **Sliding-Window Limiter (`InMemoryRateLimiter`):** Tracks timestamp lists per identity key. Stale timestamps are purged periodically to maintain strictly bounded memory.
+2. **Principal-Bound Keys:** Rate limit keys are derived exclusively from verified principal identities (`user:<uid>`, `device:<device_id>`). Caller-supplied spoofable headers (e.g. `X-Forwarded-For`) are never trusted for authenticated entities.
+3. **Inference Concurrency Semaphore:** `asyncio.Semaphore(4)` ensures that at most 4 parallel ECAPA-TDNN feature extractions can execute concurrently across HTTP and WebSocket endpoints, preventing CPU core starvation and denial of service.
+4. **Horizontal Scaling Boundary:** In-memory rate limiting and nonce stores are process-local. Distributed horizontal scaling across multiple instances requires shared Redis state (scheduled for Milestone 3C).
 

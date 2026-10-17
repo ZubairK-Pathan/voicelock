@@ -79,4 +79,55 @@ FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 ADMIN_EMAILS = load_admin_emails()
 ADMIN_UIDS = load_admin_uids()
+TRUST_TOKEN_ADMIN_CLAIMS = os.getenv("TRUST_TOKEN_ADMIN_CLAIMS", "true" if VOICELOCK_ENV != "production" else "false").lower() in ("true", "1")
+
+# ─── CORS Configuration ───────────────────────────────────────────────────────
+
+def load_allowed_cors_origins() -> list[str]:
+    """
+    Load and validate allowed CORS origins.
+    Development defaults: standard local ports (3000, 5173, 8501).
+    Production: Loaded from ALLOWED_CORS_ORIGINS environment variable.
+    Rejects wildcard '*' when credentials are enabled (prohibited by CORS spec).
+    """
+    raw = os.getenv("ALLOWED_CORS_ORIGINS", "")
+    if raw.strip():
+        origins = [orig.strip() for orig in raw.split(",") if orig.strip()]
+        if "*" in origins:
+            raise ValueError("Wildcard CORS origin '*' is strictly prohibited when credentials are enabled.")
+        return origins
+    current_env = os.getenv("VOICELOCK_ENV", VOICELOCK_ENV).strip().lower()
+    if current_env == "production":
+        return []
+    return [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8501",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8501",
+    ]
+
+
+# ─── IoT Device Security Configuration ────────────────────────────────────────
+
+MAX_TIMESTAMP_DRIFT_SECONDS = 300  # 5 minutes tolerance window for HMAC timestamps
+MAX_CONCURRENT_INFERENCES = 4      # Prevent CPU core starvation from parallel ECAPA-TDNN feature extractions
+
+def load_device_registry() -> dict[str, dict]:
+    """
+    Load registered hardware devices from environment variable DEVICE_REGISTRY_JSON.
+    Returns mapping: {device_id: {"secret": "...", "name": "..."}}
+    """
+    import json
+    raw = os.getenv("DEVICE_REGISTRY_JSON", "")
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw.strip())
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
 

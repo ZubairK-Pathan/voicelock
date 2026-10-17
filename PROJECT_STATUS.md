@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3B.1 — Firebase Authentication, RBAC Enforcement, and Security Tests (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `e2f354f`, working tree updated with 3B.1 implementation)  
-**Application Run Status:** Fully Operational (All 63 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3B.2 — IoT Device Authentication, Request-Body Protection, CORS, and Rate Limiting (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `3636c1e`, working tree updated with 3B.2 implementation)  
+**Application Run Status:** Fully Operational (All 89 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3B.1 has implemented server-side Firebase ID-token bearer authentication, trusted server-side role resolution, and granular Role-Based Access Control (RBAC) enforcement across all FastAPI endpoints. The implementation utilizes the official `firebase-admin` SDK (v7.7.0) with single-instance lifecycle management, supports token revocation checks (`check_revoked=True`) on sensitive administrative operations, and strictly rejects client-supplied role tampering (e.g. `admin=true` query/form parameters). Endpoints `/speakers` and `/identify` are restricted to `Role.ADMIN`, `/challenge` and `/verify` require authenticated callers (`Role.USER` or `Role.ADMIN`), `GET /` is hardened to return non-sensitive public health metadata only, and `/ws/identify` enforces an upfront JSON authentication handshake frame before streaming audio. A dedicated 21-test security test suite (`tests/test_auth.py`) covers token expiration, revocation, malformed schemes, unauthorized role escalation, WebSocket handshake rejection, and production safeguards. The automated test suite has expanded to 63 passing tests with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
+Milestone 3B.2 has comprehensively hardened the FastAPI service against IoT device spoofing, replay attacks, multipart buffer exhaustion, CORS vulnerabilities, and compute engine saturation. It introduces a separate IoT device authentication dependency (`get_current_device`) supporting dual schemes: a replay-resistant HMAC-SHA256 signature protocol (`X-Device-Signature`, `X-Device-Timestamp`, `X-Device-Nonce`) backed by a thread-safe sliding window `InMemoryNonceStore` and 300s clock drift window, as well as a pre-shared key fallback (`X-Device-Key`) over HTTPS with documented trade-offs. Devices are strictly assigned `Role.DEVICE` and never granted `Role.ADMIN`. An ASGI-level `RequestSizeLimiterMiddleware` inspects raw streaming chunks on-the-fly (`limited_receive`), rejecting payloads exceeding ceilings (10MB + 64KB for uploads, 1MB for non-uploads) with HTTP 413 prior to Starlette multipart disk buffering. Permissive CORS wildcards were replaced by explicit `load_allowed_cors_origins()`, rejecting `*` when credentials are enabled. Process-local sliding window rate limiting (`InMemoryRateLimiter`) protects `/challenge` (30 req/min), `/verify` (30 req/min), and `/identify` (15 req/min), while a concurrency semaphore limits parallel SpeechBrain feature extractions to 4 slots and WebSocket streaming sessions are capped at 100 frames. Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom claims for admin privileges) and B (binding ordinary user verification strictly to their own enrolled voiceprint) have been fully enforced. The test suite has expanded to 89 passing automated tests with zero regressions on Streamlit or SpeechBrain ML workflows.
 
 ---
 
@@ -123,14 +123,46 @@ Milestone 3B.1 has implemented server-side Firebase ID-token bearer authenticati
   - Single inference: Zubair recognized with similarity 0.8668.
   - Streamlit `app.py` AppTest runs with zero crashes across all 4 tabs.
 
+### Milestone 3B.2: IoT Device Authentication, ASGI Upload Limiter, CORS, and Rate Limiting (Completed)
+- **IoT Device Authentication Dependency (`app/core/device_auth.py`):**
+  - Implemented `get_current_device` dependency supporting dual authentication schemes:
+    - Scheme A (Recommended): Replay-resistant HMAC-SHA256 protocol with canonical signing `f"{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}"`, 300s timestamp tolerance window, constant-time validation (`hmac.compare_digest`), and thread-safe sliding window `InMemoryNonceStore` anti-replay defense.
+    - Scheme B: Pre-shared key fallback (`X-Device-Key`) over HTTPS with documented trade-offs regarding replay resistance.
+  - Fail-closed security: missing/empty device registry fails with HTTP 500; plain HTTP device requests rejected in production with HTTP 403; device credentials in URL query parameters strictly rejected with HTTP 400.
+  - Privilege separation: devices are strictly assigned `Role.DEVICE` and never `Role.ADMIN`. Restricted to `POST /challenge` and `POST /verify`.
+- **Reviewer Corrections A & B Enforced:**
+  - Correction A: Firebase token custom claims (`admin: true`) are guarded by `TRUST_TOKEN_ADMIN_CLAIMS` (defaults to `false` in production). Admin role is granted only via server-side bootstrap registries (`ADMIN_EMAILS`, `ADMIN_UIDS`) or authoritative administrative backend.
+  - Correction B: Ordinary web users (`Role.USER`) are authorized ONLY to verify their own voice identity (`resolve_user_voice_identity`). Arbitrary claimed identities yield HTTP 403. Trusted devices (`Role.DEVICE`) and admins can verify enrolled speakers at the door portal.
+- **ASGI Request-Body Streaming Limiter (`app/core/middleware.py`):**
+  - Fast upfront verification of declared `Content-Length`.
+  - Raw stream inspection via `limited_receive` wrapping ASGI `receive` callable. Counts cumulative byte chunks on-the-fly and terminates immediately with HTTP 413 (`PayloadTooLargeError`) without buffering entire payload or spooling to disk.
+  - Route ceilings: 10 MB + 64 KB for upload routes (`/verify`, `/identify`), 1 MB for standard endpoints.
+- **CORS Hardening (`app/core/config.py`):**
+  - Explicit allowed origins via `load_allowed_cors_origins()`.
+  - Rejects wildcard `*` with `ValueError` when credentials are enabled. Local development defaults to `localhost:3000/5173/8501`.
+- **Rate Limiting & Resource Protection (`app/core/rate_limit.py`):**
+  - Sliding-window in-memory limiter with automatic pruning of expired timestamps to bound memory.
+  - Endpoints protected: `POST /challenge` (30/min), `POST /verify` (30/min), `POST /identify` (15/min), and `WS /ws/identify` (100 frames/session).
+  - Inference concurrency semaphore (`asyncio.Semaphore(4)`) prevents CPU core starvation from parallel ECAPA-TDNN feature extractions.
+- **Dedicated Test Suite (`tests/test_device_auth.py`):**
+  - Added 25 tests covering HMAC signatures, pre-shared keys, nonce replays, stale timestamps, query parameter rejection, privilege separation, plain HTTP rejection, ASGI stream limits (with and without Content-Length, misleading Content-Length), multipart parsing, CORS allow/deny, rate limits (HTTP 429 + Retry-After), and WebSocket frame limits.
+- **Zero Regressions:**
+  - 89 automated tests pass cleanly in 2.25s (35 API + 22 Auth + 7 Policy + 25 Device Auth).
+  - Evaluation: 27/27 correct, 100% accuracy.
+  - Calibration: EER 0.00% on test split.
+  - Single inference: Zubair recognized with similarity 0.8668.
+  - Streamlit `app.py` AppTest runs with zero crashes across all 4 tabs.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **63/63 tests PASSED in 1.89s** (35 API + 21 Auth Security + 7 Auth Policy) |
-| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **21/21 tests PASSED** (token verification, RBAC, revocation, WS auth) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **89/89 tests PASSED in 2.25s** (35 API + 22 Auth + 7 Policy + 25 Device Auth) |
+| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **25/25 tests PASSED** (HMAC, PSK, anti-replay, ASGI limiter, CORS, rate limits) |
+| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
+| **Baseline API Test Suite** | `.venv/bin/pytest tests/test_api.py -v` | 0 | **35/35 tests PASSED** (baseline contracts, upload limits, challenge lifecycle) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -139,28 +171,25 @@ Milestone 3B.1 has implemented server-side Firebase ID-token bearer authenticati
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Multipart Buffering in Starlette (`SEC-004`):**
-   - *Risk:* Starlette buffers multipart payloads before route handlers execute. An attacker omitting `Content-Length` could force disk writes.
-   - *Plan:* Add ASGI raw stream size limiter middleware in Milestone 3B.2 prior to multipart parsing.
-2. **IoT Hardware Authentication Deferred (`SEC-001` partial):**
-   - *Status:* Web user authentication is fully implemented; physical IoT terminal authentication (`X-Device-Key` / HMAC) is scheduled for Milestone 3B.2.
-3. **In-Memory Challenge Store Single-Process Boundary (`SEC-006`):**
-   - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in Milestone 3C.
-4. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
+1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
+   - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
+   - *Plan:* Replace with Redis or PostgreSQL challenge store, distributed rate limiting, and durable nonce cache in Milestone 3C.
+2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
+   - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
+3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
    - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
    - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
-5. **Voice Cloning Limitations (`SEC-010`):**
+4. **Voice Cloning Limitations (`SEC-010`):**
    - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3B.2: IoT Device Authentication & ASGI Upload Limiter**:
-1. Implement IoT device authentication dependency (`get_current_device`) validating pre-shared keys (`X-Device-ID`, `X-Device-Key`).
-2. Implement ASGI raw-stream body size limiter middleware to protect Starlette from unconstrained disk buffering.
-3. Tighten CORS middleware in `app/main.py` with environment-controlled origins.
-4. Add rate limiting middleware (`slowapi`) on `/verify` and `/challenge`.
+Proceed to **Milestone 3C: PostgreSQL Persistence & Shared Challenge Storage**:
+1. Implement SQLAlchemy 2.0 async models and Alembic migrations for users, roles, devices, and challenge records.
+2. Implement durable challenge store and device credential registry backed by PostgreSQL.
+3. Replace process-local challenge store to support multi-worker Uvicorn deployments.
+4. Establish audit event logging for biometric decisions and authentication attempts.
 
 
 

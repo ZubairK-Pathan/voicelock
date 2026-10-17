@@ -53,11 +53,11 @@
 | :--- | :--- | :--- | :--- | :--- |
 | **CRITICAL** | `SEC-001` | **Unauthenticated Public Endpoints** | Endpoints `/identify`, `/verify`, `/challenge`, and `/speakers` accept unauthenticated requests. An external attacker can query the system, enumerate users, and invoke expensive biometric workflows. | **REMEDIATED (Milestone 3B.1):** Server-side Firebase Admin ID-token bearer authentication enforced across protected endpoints (`GET /speakers`, `POST /challenge`, `POST /verify`, `POST /identify`, `WS /ws/identify`). |
 | **CRITICAL** | `SEC-002` | **Directory Reconnaissance & Speaker Enumeration** | `GET /speakers` dumps all enrolled speaker names. Furthermore, `POST /challenge` with `claimed_identity` returns HTTP 404 if the speaker does not exist, enabling unauthenticated user enumeration. | **REMEDIATED (Milestone 3B.1):** `GET /speakers` and `POST /identify` restricted strictly to `Role.ADMIN` with token revocation check. `POST /challenge` requires authenticated caller. |
-| **CRITICAL** | `SEC-003` | **Compute Engine Denial of Service (CPU Exhaustion)** | SpeechBrain ECAPA-TDNN feature extraction consumes ~1.5s CPU per utterance, and Vosk consumes ~0.3s. A flood of unauthenticated requests to `/identify` or `/verify` saturates CPU cores and starves legitimate door access. | **PARTIALLY MITIGATED (3B.1):** Unauthenticated callers blocked. Rate-limiting middleware and concurrency semaphores scheduled for Milestone 3B.2/3C. |
-| **HIGH** | `SEC-004` | **Multipart Upload Buffering Vulnerability** | While `save_upload()` checks `Content-Length` and enforces byte ceilings, Starlette's `MultiPartParser` buffers uploads in memory (up to 1MB) and disk before route handlers execute. An attacker omitting `Content-Length` or using chunked encoding can force multi-gigabyte disk writes. | Scheduled for Milestone 3B.2: Implement ASGI-level raw stream body size limiter middleware that terminates incoming connections exceeding `MAX_AUDIO_SIZE_BYTES` prior to multipart parsing. |
-| **HIGH** | `SEC-005` | **Unbounded Streaming & Memory Ingestion on WebSocket** | `/ws/identify` is completely unauthenticated. Audio frame size is checked *after* `websocket.receive_bytes()` buffers the payload in memory. Continuous frame streaming can cause memory exhaustion and CPU lockup. | **REMEDIATED (Milestone 3B.1):** Handshake authentication enforced before audio loop. Connection restricted to `Role.ADMIN`. Non-admin or unauthenticated callers closed with WS code 1008. |
-| **HIGH** | `SEC-006` | **Challenge Store Single-Process Boundary & Memory Flooding** | `InMemoryChallengeStore` is process-local. An unauthenticated attacker can spam `/challenge` to create thousands of challenge objects, consuming heap memory. Multi-worker Uvicorn setups cause state divergence. | Authenticated caller required (3B.1). Distributed store (Redis / PostgreSQL) scheduled for Milestone 3C. |
-| **MEDIUM** | `SEC-007` | **Overly Permissive CORS Policy** | `app/main.py` configures `allow_origins=["*"]` with `allow_credentials=True`. This is insecure and violates modern browser CORS specifications when credentials are used. | Scheduled for Milestone 3B.2: Restrict CORS to explicit trusted domains via `ALLOWED_CORS_ORIGINS`. |
+| **CRITICAL** | `SEC-003` | **Compute Engine Denial of Service (CPU Exhaustion)** | SpeechBrain ECAPA-TDNN feature extraction consumes ~1.5s CPU per utterance, and Vosk consumes ~0.3s. A flood of unauthenticated requests to `/identify` or `/verify` saturates CPU cores and starves legitimate door access. | **REMEDIATED (Milestone 3B.2):** Process-local rate limiting (`InMemoryRateLimiter`) enforced across `/challenge` (30/min), `/verify` (30/min), and `/identify` (15/min). CPU concurrency semaphore (`MAX_CONCURRENT_INFERENCES=4`) bounds parallel feature extractions. WebSocket frame limit (100 frames) closes abusive connections. |
+| **HIGH** | `SEC-004` | **Multipart Upload Buffering Vulnerability** | While `save_upload()` checks `Content-Length` and enforces byte ceilings, Starlette's `MultiPartParser` buffers uploads in memory (up to 1MB) and disk before route handlers execute. An attacker omitting `Content-Length` or using chunked encoding can force multi-gigabyte disk writes. | **REMEDIATED (Milestone 3B.2):** Implemented ASGI-level `RequestSizeLimiterMiddleware` inspecting raw streaming chunks on-the-fly (`limited_receive`), rejecting payloads exceeding ceilings (10MB + 64KB for uploads, 1MB for non-uploads) with HTTP 413 prior to multipart disk spooling. |
+| **HIGH** | `SEC-005` | **Unbounded Streaming & Memory Ingestion on WebSocket** | `/ws/identify` is completely unauthenticated. Audio frame size is checked *after* `websocket.receive_bytes()` buffers the payload in memory. Continuous frame streaming can cause memory exhaustion and CPU lockup. | **REMEDIATED (Milestone 3B.1 & 3B.2):** Handshake authentication enforced before audio loop (3B.1). Session frame limit enforced (max 100 frames per session) with policy violation termination (code 1008), and biometric inference wrapped in concurrency control (3B.2). |
+| **HIGH** | `SEC-006` | **Challenge Store Single-Process Boundary & Memory Flooding** | `InMemoryChallengeStore` is process-local. An unauthenticated attacker can spam `/challenge` to create thousands of challenge objects, consuming heap memory. Multi-worker Uvicorn setups cause state divergence. | Authenticated caller required (3B.1); rate-limited to 30 req/min (3B.2). Distributed store (Redis / PostgreSQL) scheduled for Milestone 3C. |
+| **MEDIUM** | `SEC-007` | **Overly Permissive CORS Policy** | `app/main.py` configures `allow_origins=["*"]` with `allow_credentials=True`. This is insecure and violates modern browser CORS specifications when credentials are used. | **REMEDIATED (Milestone 3B.2):** Replaced wildcard with explicit `load_allowed_cors_origins()`. Local development defaults to `localhost:3000/5173/8501`. Wildcard `*` with credentials is explicitly rejected with `ValueError`. |
 | **MEDIUM** | `SEC-008` | **Public Reconnaissance via Health Endpoint** | `GET /` previously exposed active `threshold` (0.25) and `enrolled_speakers` count without authentication. | **REMEDIATED (Milestone 3B.1):** `threshold` and `enrolled_speakers` redacted from public `GET /`. Returns only non-sensitive health discovery metadata. |
 | **MEDIUM** | `SEC-009` | **EER Sample Size & Threshold Discordance** | Baseline threshold is 0.25, while maximum impostor similarity in the test set reached 0.6802. Reported 0.00% EER is derived from only 27 test recordings across 3 speakers. | Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production. |
 | **MEDIUM** | `SEC-010` | **Synthetic Voice / Real-Time Deepfake Vulnerability** | Spoken digit challenge-response mitigates pre-recorded static audio replay, but cannot defeat low-latency real-time voice cloning engines. | Documented limitation; evaluate acoustic phase, spectral distortion, and dynamic challenge prompts in future research. |
@@ -65,26 +65,66 @@
 
 ---
 
-## 6. Target Authentication & Authorization Architecture (Milestone 3B Implementation Blueprint)
+## 6. IoT Device Authentication & Threat Model (Milestone 3B.2)
 
-### A. Firebase ID-Token Server-Side Verification:
-1. **SDK:** Official `firebase-admin` (v7.7.0 installed).
-2. **Signature & Cryptography:** Verified using Google's public JWKS certificates, rotated automatically by Google.
-3. **Claims Validated:**
-   - `iss`: Must equal `https://securetoken.google.com/<project_id>`
-   - `aud`: Must equal `<project_id>`
-   - `sub`: Non-empty Firebase UID string
-   - `exp`: Must be in the future (1-hour standard lifetime)
-   - `iat`: Must be in the past
-4. **Revocation Checking:** `firebase_admin.auth.verify_id_token(token, check_revoked=True)` will be enforced for privileged administrative actions.
-5. **Credential Management:**
-   - Production: Application Default Credentials (ADC) or GCP service account.
-   - Development: Untracked `firebase-credentials.json` loaded via `FIREBASE_CREDENTIALS_PATH`.
-   - Mock Test Mode: Deterministic mock token verifier enabled only when `VOICELOCK_ENV=testing` for CI/CD and unit test suites.
+### A. Threat Model for Hardware Door Controllers (IoT / ESP32)
+1. **Physical Access Points:** IoT terminals (e.g. ESP32 door controllers) initiate biometric verification on behalf of users standing at the physical portal.
+2. **Replay Attacks:** Network eavesdroppers intercepting device verification traffic could replay valid audio/payloads unless requests are cryptographically signed with unique nonces and timestamps.
+3. **Privilege Escalation:** A compromised door terminal must never be capable of listing system users, enrolling new speakers, altering thresholds, or performing administrative operations.
+4. **Credential Exposure:** Device secrets must never be exposed in URL query parameters, logged in plaintext, or hardcoded in shared source code.
 
-### B. Hardware Device Authentication (ESP32):
-1. **Authentication Scheme:** `X-Device-ID` and `X-Device-Key` headers.
-2. **Key Storage:** Device keys hashed using SHA-256 with per-device salts, stored in PostgreSQL.
-3. **Scope of Authority:** Bounded strictly to `POST /challenge` and `POST /verify`. Devices cannot query directories, enroll speakers, or view system analytics.
+### B. Dual Authentication Protocols Supported:
+1. **Scheme A: Replay-Resistant HMAC-SHA256 (Recommended):**
+   - Headers: `X-Device-ID`, `X-Device-Timestamp`, `X-Device-Nonce`, `X-Device-Signature`.
+   - Canonical Signing String: `f"{METHOD}\n{PATH}\n{TIMESTAMP}\n{NONCE}\n{BODY_SHA256}"`.
+   - Clock Skew Window: Timestamps outside `MAX_TIMESTAMP_DRIFT_SECONDS = 300` (5 minutes) are rejected with HTTP 401.
+   - Nonce Uniqueness: Nonces are validated and recorded in a thread-safe sliding window `InMemoryNonceStore`. Replayed nonces are rejected with HTTP 401.
+   - Constant-Time Comparison: Signatures are compared via `hmac.compare_digest`.
+2. **Scheme B: Pre-Shared Key (X-Device-Key):**
+   - Header: `X-Device-Key` validated in constant time against server registry.
+   - **Documented Limitation:** Pre-shared keys over HTTPS protect data in transit, but lack application-layer replay resistance. If an attacker possesses a captured valid verification payload and session ID before challenge expiry, the static key does not independently detect replay. Scheme A is strongly recommended for production portals.
+
+### C. Hardening Rules for IoT Devices:
+1. **Separation of Privileges:** Authenticated devices are assigned `Role.DEVICE` and NEVER granted `Role.ADMIN`. Devices are denied on `/speakers` and `/identify`.
+2. **HTTPS Mandatory:** In production (`VOICELOCK_ENV=production`), plain HTTP device requests are rejected with HTTP 403.
+3. **Fail-Closed Registry:** Missing or empty device registry returns HTTP 500, refusing unauthenticated bypass.
+4. **No Query Parameter Credentials:** Device credentials in URL query parameters are rejected with HTTP 400.
+
+---
+
+## 7. Verification Authorization Binding (Reviewer Corrections A & B)
+
+1. **Correction A — Trustworthy Administrative Role Assignment:**
+   - Firebase ID-token custom claims (e.g. `admin: true`) are NOT trusted blindly.
+   - In production, `TRUST_TOKEN_ADMIN_CLAIMS` defaults to `false`. Administrative privileges are granted ONLY through trusted server-side bootstrap registries (`ADMIN_EMAILS`, `ADMIN_UIDS`) or an authoritative administrative backend.
+2. **Correction B — Principal Verification Authorization Binding:**
+   - Authenticated web users (`Role.USER`) are permitted ONLY to verify their own voice identity (`resolve_user_voice_identity`). Ordinary users attempting to verify arbitrary claimed identities are rejected with HTTP 403 Forbidden.
+   - Trusted hardware devices (`Role.DEVICE`) and administrators (`Role.ADMIN`) are authorized to initiate verification for registered speakers requesting access at the physical portal.
+
+---
+
+## 8. ASGI Request-Body Streaming Protection (Milestone 3B.2)
+
+1. **Pre-check Inspection:** Fast verification of `Content-Length` header prior to body ingestion (rejecting payloads > limit with HTTP 413).
+2. **Raw Stream Limiter:** Wraps the ASGI `receive` callable via `limited_receive`, counting cumulative byte chunks on-the-fly.
+3. **Zero Accumulation:** Rejects oversized bodies immediately upon exceeding ceilings without buffering the entire payload in memory or spooling to disk.
+4. **Ceilings:**
+   - Upload routes (`/verify`, `/identify`): 10 MB + 64 KB multipart boundary margin.
+   - Non-upload routes (`/challenge`, etc.): 1 MB.
+   - WebSockets: Passthrough to route-level frame limits.
+
+---
+
+## 9. Rate Limiting & Compute Concurrency Protection
+
+1. **Sliding-Window Limiter:** Process-local `InMemoryRateLimiter` with automatic pruning of expired timestamps to bound memory usage.
+2. **Principal-Bound Keys:** Keyed strictly on verified identities (`user:<uid>`, `device:<device_id>`, or `ip:<host>`). Never spoofable caller headers.
+3. **Endpoint Limits:**
+   - `POST /challenge`: 30 req/min
+   - `POST /verify`: 30 req/min
+   - `POST /identify`: 15 req/min
+4. **Inference Concurrency Semaphore:** `_inference_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INFERENCES=4)` limits parallel SpeechBrain ECAPA-TDNN feature extractions, preventing CPU starvation.
+5. **WebSocket Frame Ceiling:** `ws_identify` terminates with code 1008 if a session exceeds 100 frames.
+6. **Multi-Instance Limitation:** Process-local in-memory rate limiting does not share state across multiple worker processes or instances. Horizontal multi-instance production deployments require a distributed Redis rate limiter (Milestone 3C).
 
 

@@ -20,6 +20,7 @@ from app.core.config import (
     VOICELOCK_ENV,
     load_admin_emails,
     load_admin_uids,
+    TRUST_TOKEN_ADMIN_CLAIMS,
 )
 from app.core.auth_policy import Role, Permission, has_permission
 
@@ -32,6 +33,7 @@ class AuthenticatedUser(BaseModel):
     email_verified: bool = Field(False, description="Whether user email is verified")
     roles: List[Role] = Field(default_factory=lambda: [Role.USER], description="Assigned authorization roles")
     auth_time: Optional[int] = Field(None, description="Unix timestamp of authentication")
+    voice_identity: Optional[str] = Field(None, description="Enrolled speaker profile name bound to this user")
 
     @property
     def is_admin(self) -> bool:
@@ -162,13 +164,19 @@ def resolve_user_roles(claims: dict) -> List[Role]:
     roles = [Role.USER]
     is_admin = False
 
-    # Check verified token custom claims
-    if claims.get("admin") is True:
-        is_admin = True
-    elif claims.get("role") == "admin":
-        is_admin = True
-    elif isinstance(claims.get("roles"), list) and "admin" in claims.get("roles", []):
-        is_admin = True
+    # Check verified token custom claims (guarded by TRUST_TOKEN_ADMIN_CLAIMS)
+    env = os.getenv("VOICELOCK_ENV", VOICELOCK_ENV).strip().lower()
+    trust_claims = os.getenv(
+        "TRUST_TOKEN_ADMIN_CLAIMS",
+        "true" if env != "production" else "false"
+    ).lower() in ("true", "1")
+    if trust_claims:
+        if claims.get("admin") is True:
+            is_admin = True
+        elif claims.get("role") == "admin":
+            is_admin = True
+        elif isinstance(claims.get("roles"), list) and "admin" in claims.get("roles", []):
+            is_admin = True
 
     # Check server-side configured admin bootstrap lists
     email = claims.get("email")
@@ -264,6 +272,7 @@ async def get_current_user(request: Request) -> AuthenticatedUser:
         email_verified=bool(claims.get("email_verified", False)),
         roles=roles,
         auth_time=claims.get("auth_time"),
+        voice_identity=claims.get("voice_identity") or claims.get("speaker_name"),
     )
 
 

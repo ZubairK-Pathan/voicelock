@@ -77,4 +77,33 @@
      - For automated test suites, a mock token verification adapter will be provided when `VOICELOCK_ENV=testing`.
 * **Consequences:** Eliminates unauthenticated access, protects biometric data from unauthorized directory queries, and provides a scalable, auditable security foundation for the frontend and hardware terminal.
 
+---
+
+## ADR 007: Dual IoT Device Authentication Protocol, ASGI Stream Limiting, and Verification Principal Binding
+* **Status:** Accepted (Milestone 3B.2)
+* **Context:** Following Milestone 3B.1 web authentication, the system required hardening for IoT hardware terminals (ESP32 door controllers), protection against unconstrained upload buffering in Starlette multipart parsers, CORS hardening, rate limiting, and resolution of two reviewer security corrections: (A) never blindly trusting Firebase custom claims for admin privileges, and (B) binding verification authorization so ordinary users cannot verify arbitrary identities.
+* **Decision:**
+  1. **Dual IoT Device Authentication Protocol:**
+     - **Scheme A (Recommended):** Replay-resistant HMAC-SHA256 signature scheme using headers `X-Device-ID`, `X-Device-Timestamp`, `X-Device-Nonce`, `X-Device-Signature`. Signs canonical string `f"{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}"`. Validated in constant time via `hmac.compare_digest`. Checks 300s clock drift window and validates nonce uniqueness against thread-safe `InMemoryNonceStore`.
+     - **Scheme B:** Pre-shared secret key (`X-Device-Key`) over HTTPS for constrained microcontrollers. Documented limitation: static keys over HTTPS lack application-layer replay resistance.
+     - **Privilege Separation:** Devices are strictly `Role.DEVICE` and never granted `Role.ADMIN`. Access is restricted to `POST /challenge` and `POST /verify`.
+     - **Production Safety:** Plain HTTP device requests in production are rejected (HTTP 403). Device credentials in URL query parameters are rejected (HTTP 400). Missing registry fails closed (HTTP 500).
+  2. **Reviewer Correction A (Admin Role Assignment):**
+     - Custom token claims (`admin: true`) are guarded by `TRUST_TOKEN_ADMIN_CLAIMS`. In production, this setting defaults to `false`. Administrative privileges must originate from trusted server-side bootstrap registries (`ADMIN_EMAILS`, `ADMIN_UIDS`) or an authoritative administrative backend.
+  3. **Reviewer Correction B (Principal Verification Authorization Binding):**
+     - Ordinary authenticated users (`Role.USER`) are authorized ONLY to verify their own enrolled voiceprint (`resolve_user_voice_identity`). Ordinary callers submitting an arbitrary `claimed_identity` are rejected with HTTP 403 Forbidden.
+     - Trusted hardware door terminals (`Role.DEVICE`) and administrators (`Role.ADMIN`) are authorized to initiate verification for enrolled speakers requesting access at the portal.
+  4. **ASGI Request-Body Streaming Limiter (`RequestSizeLimiterMiddleware`):**
+     - Inspects declared `Content-Length` header upfront (fast rejection).
+     - Wraps ASGI `receive` callable with `limited_receive`, counting cumulative chunks as they stream across the wire.
+     - Raises `PayloadTooLargeError` terminating requests exceeding limits (10MB + 64KB for uploads, 1MB for non-uploads) with HTTP 413 prior to Starlette multipart disk buffering.
+  5. **CORS Hardening:**
+     - Replaces wildcard origins with explicit `load_allowed_cors_origins()`. Rejects wildcard `*` with `ValueError` when credentials are enabled.
+  6. **Rate Limiting & Resource Protection:**
+     - Sliding-window in-memory rate limiting with automatic pruning to bound memory.
+     - Limits: `/challenge` (30 req/min), `/verify` (30 req/min), `/identify` (15 req/min).
+     - Inference concurrency semaphore (`asyncio.Semaphore(4)`) prevents CPU core starvation from parallel ECAPA-TDNN feature extractions.
+     - WebSocket frame limit (100 frames) closes abusive connections with code 1008.
+* **Consequences:** Hardens all API entry points against replay attacks, credential tampering, buffer exhaustion, CPU starvation, and identity impersonation while preserving complete backward compatibility with the existing Streamlit app and ML pipelines. Horizontal multi-instance production deployments will transition process-local rate limits and nonce stores to Redis in Milestone 3C.
+
 

@@ -37,6 +37,8 @@ from liveness import (
     generate_challenge,
 )
 from app.core.auth import get_current_user, get_current_admin, AuthenticatedUser
+from app.core.device_auth import get_current_actor
+from app.core.rate_limit import _challenge_limiter, _verify_limiter, _identify_limiter
 from app.core.auth_policy import Role
 
 client = TestClient(app)
@@ -47,6 +49,9 @@ SAMPLE_WAV = Path(__file__).resolve().parent.parent / "processed_dataset" / "Zub
 @pytest.fixture(autouse=True)
 def override_auth_dependencies():
     """Ensure baseline regression tests execute under an authenticated admin context."""
+    _challenge_limiter.reset_for_testing()
+    _verify_limiter.reset_for_testing()
+    _identify_limiter.reset_for_testing()
     admin_user = AuthenticatedUser(
         uid="test-admin-uid",
         email="admin@voicelock.test",
@@ -55,9 +60,14 @@ def override_auth_dependencies():
     )
     app.dependency_overrides[get_current_user] = lambda: admin_user
     app.dependency_overrides[get_current_admin] = lambda: admin_user
+    app.dependency_overrides[get_current_actor] = lambda: admin_user
     yield
     app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(get_current_admin, None)
+    app.dependency_overrides.pop(get_current_actor, None)
+    _challenge_limiter.reset_for_testing()
+    _verify_limiter.reset_for_testing()
+    _identify_limiter.reset_for_testing()
 
 
 # ─── Baseline Contract Tests ──────────────────────────────────────────────────

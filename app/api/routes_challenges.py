@@ -3,7 +3,7 @@ app/api/routes_challenges.py — Stateful liveness challenge generation endpoint
 """
 
 import sys
-from typing import Optional
+from typing import Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.schemas.challenge import ChallengeResponse
@@ -11,7 +11,9 @@ from app.services.challenge_service import challenge_display
 import app.services.challenge_service as challenge_service
 import app.services.speaker_service as speaker_service
 from app.core.config import DEFAULT_CHALLENGE_TTL_SECONDS, DEFAULT_CHALLENGE_LENGTH
-from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
+from app.core.rate_limit import _challenge_limiter, get_actor_rate_key, enforce_rate_limit
+from app.core.middleware import PayloadTooLargeError
 
 router = APIRouter(tags=["Liveness"])
 
@@ -33,14 +35,17 @@ def _get_challenge_store():
 @router.post("/challenge", response_model=ChallengeResponse)
 async def create_challenge(
     request: Request,
-    user: AuthenticatedUser = Depends(get_current_user),
+    actor: Union[AuthenticatedUser, AuthenticatedDevice] = Depends(get_current_actor),
 ):
     """
     Generate an unpredictable, cryptographically secure 3-digit liveness challenge.
     Binds the challenge to a verification session and optionally to a claimed identity.
-    Requires authenticated web user or administrator.
+    Requires authenticated web user, administrator, or trusted IoT device.
     Expires in 60 seconds.
     """
+    # Enforce rate limit based on verified actor
+    rate_key = get_actor_rate_key(actor, request)
+    enforce_rate_limit(_challenge_limiter, rate_key, limit=30)
     claimed_identity = None
     session_id = None
 
@@ -52,6 +57,8 @@ async def create_challenge(
             if isinstance(body, dict):
                 claimed_identity = body.get("claimed_identity")
                 session_id = body.get("session_id")
+        except PayloadTooLargeError:
+            raise
         except Exception:
             pass
     else:
@@ -59,6 +66,8 @@ async def create_challenge(
             form = await request.form()
             claimed_identity = form.get("claimed_identity")
             session_id = form.get("session_id")
+        except PayloadTooLargeError:
+            raise
         except Exception:
             pass
 
@@ -71,6 +80,8 @@ async def create_challenge(
                 status_code=404,
                 detail=f"Speaker '{clean_claimed}' is not registered."
             )
+        # Ordinary users can only challenge their own voice identity
+        check_verification_authorization(actor, clean_claimed)
         claimed_identity = clean_claimed
 
     store = _get_challenge_store()

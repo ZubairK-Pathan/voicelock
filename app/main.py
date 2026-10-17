@@ -3,11 +3,14 @@ app/main.py — FastAPI application factory and entry point.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.services.speaker_service import get_system
+from app.core.config import load_allowed_cors_origins
+from app.core.middleware import RequestSizeLimiterMiddleware, PayloadTooLargeError
 
 
 @asynccontextmanager
@@ -26,14 +29,33 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS configuration
+    # 1. Hardened CORS configuration (rejects wildcard '*' with credentials)
+    cors_origins = load_allowed_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Device-ID",
+            "X-Device-Key",
+            "X-Device-Timestamp",
+            "X-Device-Nonce",
+            "X-Device-Signature",
+        ],
     )
+
+    # 2. ASGI Request Body Size Limiter (terminates oversized bodies prior to multipart parsing)
+    app.add_middleware(RequestSizeLimiterMiddleware)
+
+    @app.exception_handler(PayloadTooLargeError)
+    async def payload_too_large_exception_handler(request: Request, exc: PayloadTooLargeError):
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Payload too large. Streaming body size exceeded limit of {exc.limit_bytes} bytes."},
+        )
 
     # Register aggregate API routes
     app.include_router(api_router)

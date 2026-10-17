@@ -10,6 +10,35 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3B.2: IoT Device Authentication, ASGI Request Protection, CORS Hardening, Rate Limiting**
+  - Implemented IoT Device Authentication module `app/core/device_auth.py`:
+    - Replay-resistant HMAC-SHA256 signature scheme using device identifier, timestamp, cryptographically random nonce, HTTP method/path, and SHA-256 body hash.
+    - Constant-time signature comparison (`hmac.compare_digest`) rejecting tampering.
+    - In-memory nonce store (`InMemoryNonceStore`) with automatic TTL-based expiration and pruning preventing replay attacks.
+    - Pre-shared secret key fallback (`X-Device-Key`) with documented limitations for low-capability embedded devices.
+    - Fail-closed device registry (`VOICELOCK_DEVICE_REGISTRY`) requiring explicit configuration in production.
+    - Mandatory HTTPS enforcement in production; reject credentials in query parameters (HTTP 400).
+    - Authenticated device identity (`AuthenticatedDevice`) strictly assigned `Role.DEVICE` with zero administrative permissions (`is_admin=False`).
+    - Unified actor dependency (`get_current_actor`) seamlessly authenticating Web Users (Bearer token) or IoT Devices (`X-Device-*` headers).
+  - Implemented Reviewer Corrections:
+    - **Correction A (Admin Custom Claim Guard):** Firebase custom claims are never trusted blindly; `TRUST_TOKEN_ADMIN_CLAIMS` defaults to `False` in production, requiring server-side bootstrap (`ADMIN_EMAILS`, `ADMIN_UIDS`).
+    - **Correction B (Identity Binding Enforcement):** Ordinary `Role.USER` web accounts are strictly restricted to verifying their own enrolled voice identity (`resolve_user_voice_identity`), preventing arbitrary identity spoofing. Trusted `Role.DEVICE` and `Role.ADMIN` are authorized to verify enrolled speakers at the access portal.
+  - Implemented ASGI Request-Body Size Limiter Middleware `app/core/middleware.py`:
+    - `RequestSizeLimiterMiddleware`: True streaming ASGI inspection intercepting incoming body chunks before Starlette multipart disk parsing.
+    - Fast-path header validation and streaming accumulator rejecting payloads exceeding `MAX_AUDIO_SIZE_BYTES` (5 MB) with HTTP 413.
+    - Handles missing `Content-Length`, chunked transfer encoding, and misleading/tampered `Content-Length` headers.
+    - Never leaks biometric data or authorization tokens in error logs.
+  - Implemented Explicit CORS Hardening in `app/core/config.py` & `app/main.py`:
+    - `ALLOWED_CORS_ORIGINS` setting with fail-closed validation rejecting wildcard `*` when credentials are enabled.
+    - Defaults to explicit localhost origins for local development; requires explicit origin configuration in production.
+  - Implemented Sliding-Window Rate Limiting & Resource Protection `app/core/rate_limit.py`:
+    - Thread-safe in-memory sliding window rate limiter (`InMemoryRateLimiter`) with automatic timestamp pruning.
+    - Applied to `POST /challenge` (30 req/min), `POST /verify` (10 req/min), `POST /identify` (10 req/min).
+    - Rejection with HTTP 429 and RFC 7231 `Retry-After` header.
+    - Concurrency semaphore (`MAX_CONCURRENT_INFERENCES = 4`) bounding simultaneous SpeechBrain ECAPA-TDNN feature extractions to prevent thread pool exhaustion and CPU starvation.
+    - WebSocket streaming frame ceiling (maximum 100 frames/session) closing abusive streaming connections with WS close code 1008 (Policy Violation).
+  - Expanded automated test suite with 25 comprehensive tests in `tests/test_device_auth.py`, bringing total suite to 89 passing tests.
+
 - Implemented server-side Firebase ID-token verification module `app/core/auth.py` using `firebase-admin` (v7.7.0):
   - Single-instance lifecycle initialization (`get_firebase_app`) with ADC and service account support.
   - Strict production fail-closed security preventing insecure fallbacks and mock verifier execution in production.

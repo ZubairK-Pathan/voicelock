@@ -46,6 +46,7 @@ from app.core.auth import (
     reset_firebase_app_for_testing,
 )
 from app.core.auth_policy import Role
+from app.core.rate_limit import _challenge_limiter, _verify_limiter, _identify_limiter
 import liveness
 
 client = TestClient(app)
@@ -54,6 +55,7 @@ SAMPLE_WAV = Path(__file__).resolve().parent.parent / "processed_dataset" / "Zub
 
 ADMIN_TOKEN = "test-token-admin-valid"
 USER_TOKEN = "test-token-user-valid"
+OTHER_USER_TOKEN = "test-token-other-user"
 REVOKED_TOKEN = "test-token-revoked"
 EXPIRED_TOKEN = "test-token-expired"
 INVALID_TOKEN = "test-token-invalid"
@@ -75,7 +77,17 @@ def deterministic_test_verifier(token: str, check_revoked: bool = False) -> dict
     elif token == USER_TOKEN:
         return {
             "uid": "user-uid-002",
-            "email": "user@voicelock.enterprise",
+            "email": "zubair@voicelock.enterprise",
+            "voice_identity": "Zubair",
+            "email_verified": True,
+            "admin": False,
+            "auth_time": 1700000000,
+        }
+    elif token == OTHER_USER_TOKEN:
+        return {
+            "uid": "other-uid-999",
+            "email": "alice@voicelock.enterprise",
+            "voice_identity": "Alice",
             "email_verified": True,
             "admin": False,
             "auth_time": 1700000000,
@@ -120,10 +132,16 @@ def deterministic_test_verifier(token: str, check_revoked: bool = False) -> dict
 def setup_test_auth():
     """Configure deterministic verifier and clear dependency overrides for dedicated auth tests."""
     app.dependency_overrides.clear()
+    _challenge_limiter.reset_for_testing()
+    _verify_limiter.reset_for_testing()
+    _identify_limiter.reset_for_testing()
     set_test_token_verifier(deterministic_test_verifier)
     yield
     set_test_token_verifier(None)
     app.dependency_overrides.clear()
+    _challenge_limiter.reset_for_testing()
+    _verify_limiter.reset_for_testing()
+    _identify_limiter.reset_for_testing()
 
 
 # ─── 1. Health Discovery (Public) ─────────────────────────────────────────────
@@ -253,6 +271,22 @@ def test_authenticated_user_allowed_on_challenge_and_verify():
     data = r_challenge.json()
     assert "challenge_id" in data
     assert "digits" in data
+
+
+def test_regular_user_cannot_verify_arbitrary_claimed_identity():
+    """
+    Enforce Reviewer Correction B:
+    An ordinary user cannot verify an arbitrary identity by merely submitting claimed_identity.
+    User Alice claiming 'Zubair' must be rejected with HTTP 403 Forbidden.
+    """
+    other_headers = {"Authorization": f"Bearer {OTHER_USER_TOKEN}"}
+    r_challenge = client.post(
+        "/challenge",
+        headers=other_headers,
+        json={"session_id": "test-session-alice", "claimed_identity": "Zubair"},
+    )
+    assert r_challenge.status_code == 403
+    assert "only authorized to verify your own voice identity" in r_challenge.json()["detail"]
 
 
 def test_client_supplied_role_tampering_rejected():

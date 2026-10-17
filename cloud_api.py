@@ -86,6 +86,35 @@ from app.core.auth_policy import (
     is_public_endpoint,
 )
 
+# Re-export device authentication and actor resolution
+from app.core.device_auth import (
+    AuthenticatedDevice,
+    get_current_device,
+    get_current_actor,
+    resolve_user_voice_identity,
+    check_verification_authorization,
+    set_test_device_registry,
+    get_nonce_store,
+    InMemoryNonceStore,
+)
+
+# Re-export middleware and rate limiting
+from app.core.middleware import (
+    RequestSizeLimiterMiddleware,
+    PayloadTooLargeError,
+)
+from app.core.rate_limit import (
+    InMemoryRateLimiter,
+    enforce_rate_limit,
+    get_actor_rate_key,
+    acquire_inference_slot,
+    release_inference_slot,
+)
+from app.core.config import (
+    load_allowed_cors_origins,
+    load_device_registry,
+)
+
 # Re-export application instance and factory
 from app.main import app, create_app
 
@@ -133,6 +162,23 @@ __all__ = [
     "has_permission",
     "get_endpoint_policy",
     "is_public_endpoint",
+    "AuthenticatedDevice",
+    "get_current_device",
+    "get_current_actor",
+    "resolve_user_voice_identity",
+    "check_verification_authorization",
+    "set_test_device_registry",
+    "get_nonce_store",
+    "InMemoryNonceStore",
+    "RequestSizeLimiterMiddleware",
+    "PayloadTooLargeError",
+    "InMemoryRateLimiter",
+    "enforce_rate_limit",
+    "get_actor_rate_key",
+    "acquire_inference_slot",
+    "release_inference_slot",
+    "load_allowed_cors_origins",
+    "load_device_registry",
 ]
 
 if __name__ == "__main__":

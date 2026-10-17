@@ -6,7 +6,7 @@ import io
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -14,6 +14,15 @@ import soundfile as sf
 
 from app.core.config import SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES
 from app.core.auth import AuthenticatedUser, get_current_user, get_current_admin, authenticate_ws_admin
+from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
+from app.core.rate_limit import (
+    _verify_limiter,
+    _identify_limiter,
+    get_actor_rate_key,
+    enforce_rate_limit,
+    acquire_inference_slot,
+    release_inference_slot,
+)
 import app.services.speaker_service as speaker_service
 import app.services.challenge_service as challenge_service
 import app.services.verification_service as verification_service
@@ -74,8 +83,11 @@ async def identify(
 ):
     """
     Identify the speaker in an uploaded audio file (1-to-N matching).
-    Enforces server-side threshold, bounded upload limits, and ADMIN privileges.
+    Enforces server-side threshold, bounded upload limits, rate limits, and ADMIN privileges.
     """
+    rate_key = get_actor_rate_key(admin, request)
+    enforce_rate_limit(_identify_limiter, rate_key, limit=15)
+
     get_sys = _get_system()
     profiles, classifier = get_sys()
     if not profiles:
@@ -83,6 +95,7 @@ async def identify(
 
     save_fn = _get_save_upload()
     tmp_path = save_fn(audio, request=request)
+    await acquire_inference_slot()
     try:
         predict_fn = _get_predict_speaker()
         result = predict_fn(
@@ -111,6 +124,7 @@ async def identify(
     except Exception:
         raise HTTPException(status_code=500, detail="Biometric identification inference failed.")
     finally:
+        release_inference_slot()
         if tmp_path.exists():
             try:
                 os.unlink(tmp_path)
@@ -126,21 +140,25 @@ async def verify(
     challenge_id: Optional[str] = Form(None, description="Active liveness challenge ID"),
     session_id: Optional[str] = Form(None, description="Active verification session ID"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
-    user: AuthenticatedUser = Depends(get_current_user),
+    actor: Union[AuthenticatedUser, AuthenticatedDevice] = Depends(get_current_actor),
 ):
     """
     Verify whether the audio matches the claimed speaker identity (1-to-1)
     AND satisfies the bound liveness challenge (anti-spoofing / anti-replay).
-    Requires authenticated web user or administrator.
+    Requires authenticated web user, administrator, or trusted IoT device.
     
     Security workflow:
     1. Validates registration of claimed identity.
-    2. Enforces presence of challenge_id and session_id.
-    3. Atomically consumes the challenge (Single-Attempt Invalidation) BEFORE audio processing.
-    4. Evaluates spoken digits against expected challenge via offline Vosk STT.
-    5. If liveness fails, access is DENIED immediately without running ML inference.
-    6. If liveness passes, runs ECAPA-TDNN speaker verification at SERVER_THRESHOLD.
+    2. Enforces caller authorization (Correction B: ordinary users can only verify their own voice identity).
+    3. Enforces rate limits per verified actor.
+    4. Enforces presence of challenge_id and session_id.
+    5. Atomically consumes the challenge (Single-Attempt Invalidation) BEFORE audio processing.
+    6. Evaluates spoken digits against expected challenge via offline Vosk STT.
+    7. If liveness fails, access is DENIED immediately without running ML inference.
+    8. If liveness passes, runs ECAPA-TDNN speaker verification under concurrency control.
     """
+    rate_key = get_actor_rate_key(actor, request)
+    enforce_rate_limit(_verify_limiter, rate_key, limit=30)
     get_sys = _get_system()
     profiles, classifier = get_sys()
     if not profiles:
@@ -152,6 +170,9 @@ async def verify(
             status_code=404,
             detail=f"Speaker '{claimed_identity}' is not registered."
         )
+
+    # Caller authorization: Ordinary users can only verify their own voice identity
+    check_verification_authorization(actor, claimed_identity)
 
     # 1. Challenge & Session binding validation
     if not challenge_id or not str(challenge_id).strip() or not session_id or not str(session_id).strip():
@@ -196,16 +217,21 @@ async def verify(
                 "reason": f"Liveness check failed: {liveness_reason}",
             }
 
-        # 5. Biometric speaker verification (SpeechBrain ECAPA-TDNN)
-        verify_fn = _get_verify_speaker()
-        result = verify_fn(
-            audio_path=str(tmp_path),
-            claimed_identity=claimed_identity,
-            threshold=SERVER_THRESHOLD,
-            classifier=classifier,
-            profiles=profiles,
-            verbose=False,
-        )
+        # 5. Biometric speaker verification (SpeechBrain ECAPA-TDNN) under concurrency control
+        await acquire_inference_slot()
+        try:
+            verify_fn = _get_verify_speaker()
+            result = verify_fn(
+                audio_path=str(tmp_path),
+                claimed_identity=claimed_identity,
+                threshold=SERVER_THRESHOLD,
+                classifier=classifier,
+                profiles=profiles,
+                verbose=False,
+            )
+        finally:
+            release_inference_slot()
+
         return {
             "accepted": result["is_accepted"],
             "action": "UNLOCK" if result["is_accepted"] else "DENY",
@@ -238,16 +264,25 @@ async def ws_identify(websocket: WebSocket):
     """
     WebSocket endpoint for real-time speaker identification.
     Restricted to ADMIN. Requires initial authentication handshake before accepting audio.
-    Enforces upload limits and server-side calibrated threshold.
+    Enforces upload limits, session frame ceilings, and server-side calibrated threshold.
     """
     await websocket.accept()
     admin_user = await authenticate_ws_admin(websocket)
     get_sys = _get_system()
     profiles, classifier = get_sys()
 
+    frame_count = 0
+    max_frames = 100
+
     try:
         while True:
             audio_bytes = await websocket.receive_bytes()
+            frame_count += 1
+            if frame_count > max_frames:
+                await websocket.send_json({"error": "Session frame limit exceeded (max 100 frames)."})
+                await websocket.close(code=1008)
+                break
+
             if not audio_bytes:
                 await websocket.send_json({"error": "Empty audio payload"})
                 continue
@@ -261,14 +296,19 @@ async def ws_identify(websocket: WebSocket):
                 tmp_path = Path(tmp.name)
 
             try:
-                predict_fn = _get_predict_speaker()
-                result = predict_fn(
-                    audio_path=str(tmp_path),
-                    threshold=SERVER_THRESHOLD,
-                    classifier=classifier,
-                    profiles=profiles,
-                    verbose=False,
-                )
+                await acquire_inference_slot()
+                try:
+                    predict_fn = _get_predict_speaker()
+                    result = predict_fn(
+                        audio_path=str(tmp_path),
+                        threshold=SERVER_THRESHOLD,
+                        classifier=classifier,
+                        profiles=profiles,
+                        verbose=False,
+                    )
+                finally:
+                    release_inference_slot()
+
                 await websocket.send_json({
                     "speaker": result["predicted_speaker"],
                     "score": round(result["similarity"], 4),
