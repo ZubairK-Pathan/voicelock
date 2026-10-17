@@ -38,7 +38,7 @@ from audio_utils import (
 )
 
 
-def compute_scores(profiles: dict, all_embeddings: dict) -> tuple[list, list]:
+def compute_scores(profiles: dict, all_embeddings: list) -> tuple[list, list]:
     """
     Compute genuine and impostor similarity scores from the saved embeddings.
 
@@ -51,7 +51,7 @@ def compute_scores(profiles: dict, all_embeddings: dict) -> tuple[list, list]:
     genuine_scores = []
     impostor_scores = []
 
-    for emb_info in all_embeddings.values():
+    for emb_info in all_embeddings:
         speaker = emb_info["speaker"]
         embedding = emb_info["embedding"]
         split = emb_info.get("split", "test")

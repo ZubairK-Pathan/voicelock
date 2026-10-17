@@ -44,3 +44,11 @@ fine_tuned_model/
 .vscode/
 .idea/
 .agents/
+
+# Secrets & Credentials
+firebase-credentials.json
+*.key
+*.pem
+.env
+.env.*
+!.env.example
