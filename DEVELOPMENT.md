@@ -78,3 +78,15 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
 - **No Mock Predictions in Production:** Always route real inference through `predict_speaker` / `verify_speaker`.
 - **Preserve Error Handling:** Do not call `sys.exit()` in code imported by web frameworks; raise custom exceptions instead.
 - **Never Hardcode Secrets:** Use `.env` and environment variables. Verify changes with `git status` and `git diff` before committing.
+
+---
+
+## 7. Authentication Architecture & Testing Guidelines
+- **Identity Separation:** Never treat a Firebase User ID (`uid`) as a speaker voiceprint name, and never treat a caller-supplied `session_id` or `device_id` as proof of identity.
+- **Declarative Access Policy:** Endpoint permissions and authentication schemes are defined declaratively in `app/core/auth_policy.py`.
+- **Testing Auth Policies:**
+  ```bash
+  pytest tests/test_auth_policy.py -v
+  ```
+- **Local Development Security Notice:** The existing API endpoints currently operate unauthenticated for local development and smoke-testing. They MUST NOT be deployed publicly or exposed to unvetted networks until Milestone 3B (Firebase Auth & Device Token Verification) is implemented.
+

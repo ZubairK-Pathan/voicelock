@@ -45,4 +45,46 @@
 - Run `git status` and `git diff --staged` before every commit to inspect for accidental credential inclusion.
 - If credentials are ever pushed to a public remote, immediately revoke and rotate the affected keys in the Firebase/GCP Console.
 
+---
+
+## 5. Security Review Findings Ranked by Severity (Milestone 3A Audit)
+
+| Severity | ID | Vulnerability / Threat | Impact & Attack Scenario | Remediation in Milestone 3B/3C |
+| :--- | :--- | :--- | :--- | :--- |
+| **CRITICAL** | `SEC-001` | **Unauthenticated Public Endpoints** | Endpoints `/identify`, `/verify`, `/challenge`, and `/speakers` accept unauthenticated requests. An external attacker can query the system, enumerate users, and invoke expensive biometric workflows. | Implement Firebase Admin SDK JWT bearer authentication for web clients and pre-shared cryptographic keys for IoT devices. |
+| **CRITICAL** | `SEC-002` | **Directory Reconnaissance & Speaker Enumeration** | `GET /speakers` dumps all enrolled speaker names. Furthermore, `POST /challenge` with `claimed_identity` returns HTTP 404 if the speaker does not exist, enabling unauthenticated user enumeration. | Restrict `GET /speakers` to `Role.ADMIN`. Standardize `POST /challenge` error responses to prevent timing and status code enumeration. |
+| **CRITICAL** | `SEC-003` | **Compute Engine Denial of Service (CPU Exhaustion)** | SpeechBrain ECAPA-TDNN feature extraction consumes ~1.5s CPU per utterance, and Vosk consumes ~0.3s. A flood of unauthenticated requests to `/identify` or `/verify` saturates CPU cores and starves legitimate door access. | Restrict endpoints to authenticated callers, add rate limiting middleware (slowapi), and introduce bounded inference concurrency semaphores. |
+| **HIGH** | `SEC-004` | **Multipart Upload Buffering Vulnerability** | While `save_upload()` checks `Content-Length` and enforces byte ceilings, Starlette's `MultiPartParser` buffers uploads in memory (up to 1MB) and disk before route handlers execute. An attacker omitting `Content-Length` or using chunked encoding can force multi-gigabyte disk writes. | Implement an ASGI-level raw stream body size limiter middleware that terminates incoming connections exceeding `MAX_AUDIO_SIZE_BYTES` + 64KB margin prior to multipart parsing. |
+| **HIGH** | `SEC-005` | **Unbounded Streaming & Memory Ingestion on WebSocket** | `/ws/identify` is completely unauthenticated. Audio frame size is checked *after* `websocket.receive_bytes()` buffers the payload in memory. Continuous frame streaming can cause memory exhaustion and CPU lockup. | Require authentication ticket/token on WebSocket handshake, enforce message-rate limits, and restrict streaming to `Role.ADMIN`. |
+| **HIGH** | `SEC-006` | **Challenge Store Single-Process Boundary & Memory Flooding** | `InMemoryChallengeStore` is process-local. An unauthenticated attacker can spam `/challenge` to create thousands of challenge objects, consuming heap memory. Multi-worker Uvicorn setups cause state divergence. | Require authentication for challenge creation, apply per-client rate limits, and transition to shared atomic storage (Redis / PostgreSQL) in Milestone 3C. |
+| **MEDIUM** | `SEC-007` | **Overly Permissive CORS Policy** | `app/main.py` configures `allow_origins=["*"]` with `allow_credentials=True`. This is insecure and violates modern browser CORS specifications when credentials are used. | Restrict CORS to explicit trusted domains via `ALLOWED_CORS_ORIGINS` environment variable. |
+| **MEDIUM** | `SEC-008` | **Public Reconnaissance via Health Endpoint** | `GET /` currently exposes active `threshold` (0.25) and `enrolled_speakers` count without authentication. | Redact `threshold` and `enrolled_speakers` from unauthenticated `GET /`. Expose system metrics only to authenticated administrators. |
+| **MEDIUM** | `SEC-009` | **EER Sample Size & Threshold Discordance** | Baseline threshold is 0.25, while maximum impostor similarity in the test set reached 0.6802. Reported 0.00% EER is derived from only 27 test recordings across 3 speakers. | Conduct a comprehensive biometric evaluation across all 12 enrolled speakers with multi-session acoustic diversity before production deployment. |
+| **MEDIUM** | `SEC-010` | **Synthetic Voice / Real-Time Deepfake Vulnerability** | Spoken digit challenge-response mitigates pre-recorded static audio replay, but cannot defeat low-latency real-time voice cloning engines. | Document limitation; evaluate acoustic phase, spectral distortion, and dynamic challenge prompts in future research. |
+| **LOW** | `SEC-011` | **Dynamic Test Adapter Fragility** | `sys.modules.get("cloud_api")` lookup pattern is non-standard. If future tests or services import `app` directly without `cloud_api`, patches on `cloud_api` will not apply. | Transition to standard FastAPI dependency injection (`Depends`) in future refactoring. |
+
+---
+
+## 6. Target Authentication & Authorization Architecture (Milestone 3B Implementation Blueprint)
+
+### A. Firebase ID-Token Server-Side Verification:
+1. **SDK:** Official `firebase-admin` (v7.7.0 installed).
+2. **Signature & Cryptography:** Verified using Google's public JWKS certificates, rotated automatically by Google.
+3. **Claims Validated:**
+   - `iss`: Must equal `https://securetoken.google.com/<project_id>`
+   - `aud`: Must equal `<project_id>`
+   - `sub`: Non-empty Firebase UID string
+   - `exp`: Must be in the future (1-hour standard lifetime)
+   - `iat`: Must be in the past
+4. **Revocation Checking:** `firebase_admin.auth.verify_id_token(token, check_revoked=True)` will be enforced for privileged administrative actions.
+5. **Credential Management:**
+   - Production: Application Default Credentials (ADC) or GCP service account.
+   - Development: Untracked `firebase-credentials.json` loaded via `FIREBASE_CREDENTIALS_PATH`.
+   - Mock Test Mode: Deterministic mock token verifier enabled only when `VOICELOCK_ENV=testing` for CI/CD and unit test suites.
+
+### B. Hardware Device Authentication (ESP32):
+1. **Authentication Scheme:** `X-Device-ID` and `X-Device-Key` headers.
+2. **Key Storage:** Device keys hashed using SHA-256 with per-device salts, stored in PostgreSQL.
+3. **Scope of Authority:** Bounded strictly to `POST /challenge` and `POST /verify`. Devices cannot query directories, enroll speakers, or view system analytics.
+
 

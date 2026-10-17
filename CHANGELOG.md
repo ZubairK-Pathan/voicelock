@@ -10,6 +10,15 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Created declarative authentication policy module `app/core/auth_policy.py` defining:
+  - Strict decoupling between `IdentityType.WEB_USER`, `IdentityType.SPEAKER_VOICE`, and `IdentityType.IOT_DEVICE`.
+  - Role-Based Access Control (`Role.ADMIN`, `Role.USER`, `Role.DEVICE`, `Role.ANONYMOUS`).
+  - Declarative endpoint permission matrix (`ENDPOINT_POLICIES`) and query helpers.
+- Added automated unit test suite `tests/test_auth_policy.py` (7 tests), expanding total test suite to 42 passing tests.
+- Added comprehensive authentication architecture and device verification flows in `ARCHITECTURE.md`.
+- Added ADR 006 (Identity Separation & Dual-Credential Auth Architecture) in `DECISIONS.md`.
+- Added ranked security vulnerability audit table in `SECURITY.md` (11 findings from Critical to Low).
+
 - Modularized FastAPI backend into standard enterprise `app/` package layout:
   - `app/core/config.py`: Centralized configuration (`SERVER_THRESHOLD`, `MAX_AUDIO_SIZE_BYTES`, `ALLOWED_EXTENSIONS`) with defensive bounded loaders.
   - `app/core/errors.py`: Sanitized HTTP exception factories.

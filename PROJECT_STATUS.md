@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 2C — Security Review & Incremental API Modularization (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `ee0306c`, working tree updated with 2C implementation)  
-**Application Run Status:** Fully Operational (All 35 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3A — Authentication Design & Security Review (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `48b3919`, working tree updated with 3A implementation)  
+**Application Run Status:** Fully Operational (All 42 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 2C (Security Review and Incremental API Modularization) has completed a comprehensive security review of the stateful challenge engine and successfully refactored the monolithic `cloud_api.py` into a clean, decoupled enterprise application package (`app/`). In `POST /verify`, challenge validation and atomic consumption now execute strictly *before* saving audio uploads or reading payloads from the network, eliminating disk I/O and buffering denial-of-service on invalid or expired challenges. The codebase now features dedicated modules for configuration (`app/core/config.py`), exception helpers (`app/core/errors.py`), Pydantic schemas (`app/schemas/`), service singletons (`app/services/`), and route controllers (`app/api/`). A dynamic lookup adapter ensures full backward compatibility with test patches targeting `cloud_api`, and `cloud_api.py` remains the legacy root entry point. All 35 automated tests, the full ML evaluation suite (27/27 samples correct, 100% accuracy), threshold calibration, and the Streamlit AppTest pass with zero regressions.
+Milestone 3A (Authentication Design and Security Review) has completed an in-depth security audit of the API surface, categorized 11 vulnerabilities ranked by severity, and established the declarative authentication and authorization architecture for VoiceLock Enterprise. The security model explicitly decouples three distinct identity domains: human Web Users (`IdentityType.WEB_USER`, authenticated via Firebase RS256 JWTs), passive Biometric Voiceprints (`IdentityType.SPEAKER_VOICE`, verified via 192-d ECAPA-TDNN embeddings and liveness), and IoT Hardware Terminals (`IdentityType.IOT_DEVICE`, authenticated via pre-shared secret keys / HMAC tokens). A new declarative access policy module (`app/core/auth_policy.py`) defines a formal Role-Based Access Control (RBAC) matrix across `Admin`, `User`, `Device`, and `Anonymous` roles with dedicated unit test coverage. The automated test suite has expanded to 42 passing tests with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
 
 ---
 
@@ -86,13 +86,24 @@ Milestone 2C (Security Review and Incremental API Modularization) has completed 
   - Streamlit `app.py` AppTest passes with zero crashes.
   - ML inference, evaluation (27/27 correct, 100% accuracy), and threshold calibration execute successfully.
 
+### Milestone 3A: Authentication Design & Security Review (Completed)
+- **Comprehensive Threat Audit:** Identified 11 security findings ranked from Critical to Low:
+  - Critical: Unauthenticated endpoints, user enumeration via `/speakers` & `/challenge`, and compute engine DoS via unconstrained ML inference.
+  - High: Starlette multipart memory/disk buffering prior to route handler entry, unconstrained WebSocket frame ingestion, and in-memory challenge store memory limits.
+  - Medium: Permissive CORS wildcard origins with credentials, public metric exposure in `/`, small EER sample size (27 recordings/3 speakers), and voice deepfake boundaries.
+  - Low: Non-standard dynamic lookup adapter in routes.
+- **Identity Decoupling:** Formally separated `IdentityType.WEB_USER` (Firebase JWT), `IdentityType.IOT_DEVICE` (Pre-Shared Key), and `IdentityType.SPEAKER_VOICE` (Passive 192-d biometric).
+- **Declarative Access Policy Module:** Created `app/core/auth_policy.py` defining `Role`, `Permission`, and `ENDPOINT_POLICIES` matrix.
+- **Automated Policy Tests:** Added `tests/test_auth_policy.py` (7 tests), expanding the test suite to 42 passing tests.
+- **Documentation Updates:** Comprehensive updates to `ARCHITECTURE.md`, `SECURITY.md`, `DECISIONS.md` (ADR 006), and `DEVELOPMENT.md`.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Automated API Test Suite** | `.venv/bin/pytest -v` | 0 | 35/35 tests PASSED in 1.21s |
-| **Early Rejection Test** | `.venv/bin/pytest -k test_verify_invalid_challenge_rejects_before_saving_upload` | 0 | PASSED (Upload save not called on invalid challenge) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **42/42 tests PASSED in 1.48s** (35 API + 7 Auth Policy) |
+| **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -101,28 +112,31 @@ Milestone 2C (Security Review and Incremental API Modularization) has completed 
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Session IDs are Correlation Tokens, Not Authentication:**
-   - *Risk:* A client-provided `session_id` binds challenge generation to verification, but does NOT authenticate the principal. An attacker guessing or sharing session IDs could associate verification attempts.
-   - *Requirement:* Challenges must eventually bind to authenticated principals (JWT tokens or mTLS device keys). Endpoints remain private to development.
-2. **In-Memory Challenge Store Scope:**
+1. **API Endpoints Remain Unauthenticated in Working Tree:**
+   - *Status:* Milestone 3A established the design and policy framework; live enforcement middleware is scheduled for Milestone 3B.
+   - *Action:* Keep API private to local development until Milestone 3B authentication is applied.
+2. **Multipart Buffering in Starlette:**
+   - *Risk:* Starlette buffers multipart payloads before route handlers execute. An attacker omitting `Content-Length` can force disk writes.
+   - *Plan:* Add ASGI raw stream size limiter middleware in Milestone 3B.
+3. **In-Memory Challenge Store Single-Process Boundary:**
    - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in future database milestone.
-3. **Unauthenticated Public Endpoints:**
-   - *Risk:* `/identify`, `/verify`, and `/challenge` have no caller authentication (API tokens/JWT) or rate limiting.
-   - *Plan:* Add Firebase/JWT authentication for users and API keys for IoT devices along with rate-limiting middleware before public deployment.
-4. **Small Evaluation Dataset:**
-   - *Risk:* Reported 0.00% EER is computed on only 3 speakers (27 test samples). Baseline threshold of 0.25 is retained.
+   - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in Milestone 3C.
+4. **Small Evaluation Dataset & Threshold Discordance:**
+   - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
+   - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
 5. **Voice Cloning Limitations:**
    - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3: Authentication, Rate Limiting & Access Control**:
-1. Implement JWT bearer token validation (Firebase Auth / local JWT).
-2. Implement device API key authentication for IoT demonstration terminals.
-3. Add rate limiting middleware (e.g. slowapi / Redis rate limiter) to protect biometric inference and challenge generation from brute force.
-4. Keep the unauthenticated API strictly private until these authentication and rate-limiting safeguards are in place.
+Proceed to **Milestone 3B: Firebase ID-Token Verification & IoT Device Pre-Shared Key Middleware**:
+1. Implement Firebase ID token verification dependency (`verify_firebase_user`) using `firebase-admin.auth`.
+2. Implement IoT device token authentication dependency (`verify_device_token`) validating `X-Device-Key`.
+3. Add ASGI raw-body size limiter middleware to protect Starlette multipart buffer.
+4. Protect `/speakers`, `/challenge`, `/verify`, `/identify`, and `/ws/identify` according to the policy in `app/core/auth_policy.py`.
+5. Add automated tests covering missing, invalid, expired, and revoked tokens, as well as unauthorized role access attempts.
+
 
 
 

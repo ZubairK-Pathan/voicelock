@@ -56,3 +56,25 @@
   4. In `POST /verify`, atomically validate and consume the liveness challenge *before* calling `save_upload()`, rejecting invalid, expired, reused, or session-mismatched challenges upfront with HTTP 400 before payload spooling or disk I/O.
 * **Consequences:** Provides clean architectural separation and service extensibility while preserving identical HTTP contracts, full backward compatibility, and zero regressions across all 35 automated tests.
 
+---
+
+## ADR 006: Identity Separation & Dual-Credential Authentication Architecture
+* **Status:** Accepted
+* **Context:** The system requires authentication before exposing biometric verification, challenge generation, or directory queries to the network. Three fundamentally different entity types interact with the system: human operators using a web console, IoT physical kiosk terminals at doors, and human voiceprints. Conflating these three models (e.g. treating a Firebase UID as a voiceprint name, or treating a caller-supplied `session_id` or `device_id` as authentication) creates severe privilege escalation, spoofing, and enumeration vulnerabilities.
+* **Decision:**
+  1. **Strictly decouple three identity domains:**
+     - `IdentityType.WEB_USER`: Human operator/employee authenticated via Firebase ID Tokens (RS256 JWT).
+     - `IdentityType.IOT_DEVICE`: Hardware demonstration terminal authenticated via Pre-Shared Key / HMAC token (`X-Device-Key`).
+     - `IdentityType.SPEAKER_VOICE`: Passive biometric credential evaluated via ECAPA-TDNN cosine similarity (>= 0.25) and Vosk liveness check.
+  2. **Implement Role-Based Access Control (RBAC):**
+     - `Role.ANONYMOUS`: Read-only health check (`/`).
+     - `Role.DEVICE`: Bounded strictly to `POST /challenge` and `POST /verify`. Devices cannot list speakers, enroll voices, or change thresholds.
+     - `Role.USER`: Standard authenticated employee. Can initiate self-verification.
+     - `Role.ADMIN`: Security administrator. Can list speakers (`GET /speakers`), enroll voices, view audit logs, and invoke `POST /identify`.
+  3. **Credential Handling:**
+     - Firebase service account keys (`firebase-credentials.json`) must remain strictly untracked and excluded from version control via `.gitignore`.
+     - In development, credentials are loaded via `FIREBASE_CREDENTIALS_PATH`.
+     - For automated test suites, a mock token verification adapter will be provided when `VOICELOCK_ENV=testing`.
+* **Consequences:** Eliminates unauthenticated access, protects biometric data from unauthorized directory queries, and provides a scalable, auditable security foundation for the frontend and hardware terminal.
+
+

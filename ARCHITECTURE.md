@@ -94,16 +94,17 @@ Voice Recognition/
                                │   React + TS Frontend   │
                                │  (Vite + Design System) │
                                └────────────┬────────────┘
-                                            │ Firebase ID Token
+                                            │ Firebase ID Token (RS256 JWT)
                                             ▼
 ┌──────────────────────┐ HTTPS POST  ┌──────────────────────────────────────────────────┐
 │ ESP32 Desk Terminal  │────────────►│               FastAPI Backend Server             │
 │ (Microphone/Display) │ Device Key  │                                                  │
-└──────────────────────┘             ├──────────────────────────────────────────────────┤
+└──────────────────────┘ (HMAC-SHA)  ├──────────────────────────────────────────────────┤
                                      │ - API Routes (/auth, /verify, /enroll, /devices) │
-                                     │ - Middleware: Rate Limits, Max Uploads, Auth     │
-                                     │ - Challenge-Response Service (TTL, CSPRNG)       │
-                                     │ - Biometric Inference Service                    │
+                                     │ - Middleware: Rate Limits, Streaming Size Limits │
+                                     │ - Auth Middleware (Firebase JWT & Device Keys)   │
+                                     │ - Challenge Service (TTL, CSPRNG, Atomic Lock)   │
+                                     │ - Biometric Inference Service (ECAPA-TDNN)       │
                                      └──────────────┬───────────────────┬───────────────┘
                                                     │                   │
                                                     ▼                   ▼
@@ -119,9 +120,91 @@ Voice Recognition/
 
 ---
 
-## 4. Identity Separation Model
-To prevent privilege escalation and unauthorized access, four identities are strictly decoupled:
-1. **Web User Identity:** Authenticated via Firebase Authentication (JWT verified on backend).
-2. **Voice Identity:** Biometric profile embedding evaluated via cosine similarity by the ML engine.
-3. **IoT Device Identity:** Physical demonstration device authenticated via signed pre-shared keys / HMAC tokens.
-4. **Application Authorization:** Server-enforced Role-Based Access Control (RBAC) governing what operations each authenticated entity may perform.
+## 5. Identity Separation & Access Control Model
+
+To eliminate privilege escalation, identity confusion, and spoofing vulnerabilities, VoiceLock strictly decouples three fundamental identity domains:
+
+```
+┌─────────────────────────────────┐      ┌─────────────────────────────────┐
+│        Web User Identity        │      │       IoT Device Identity       │
+│  - Firebase Auth UID (RS256)    │      │  - Physical Device ID           │
+│  - Email & Role Claims          │      │  - Cryptographic Device Secret  │
+│  - Subject of Admin/Dashboard   │      │  - Subject of Door Access Relays│
+└────────────────┬────────────────┘      └────────────────┬────────────────┘
+                 │                                        │
+                 │ Maps to 1-to-N                         │ Interacts with
+                 ▼                                        ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      Enrolled Speaker / Voice Identity                   │
+│  - Passive Biometric Voiceprint (192-d ECAPA-TDNN embedding vector)      │
+│  - speaker_id (Alphanumeric identifier, e.g., 'spk_zubair_01')           │
+│  - Validated ONLY via Cosine Similarity >= 0.25 AND Spoken Liveness Pass │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Identity Definitions & Non-Negotiable Boundaries:
+1. **Web User Identity (`IdentityType.WEB_USER`):**
+   - **Authentication:** Verified via Firebase Admin SDK (`firebase_admin.auth.verify_id_token(token, check_revoked=True)`).
+   - **Authority:** Authenticates a human operator or employee accessing the web console.
+   - **Crucial Rule:** A Firebase `uid` does NOT automatically correspond to a speaker voice identity. A user may have an administrative web account without being enrolled as a voiceprint, or may be explicitly mapped to a speaker profile via a relational mapping in PostgreSQL (`users.speaker_profile_id`).
+2. **Enrolled Speaker / Voice Identity (`IdentityType.SPEAKER_VOICE`):**
+   - **Authentication:** Passive acoustic biometric credential evaluated strictly via cosine similarity against enrolled 192-dimensional embeddings.
+   - **Authority:** Validates the physical presence and identity of a human speaker. Cannot initiate administrative actions or manage API configurations.
+   - **Crucial Rule:** Stating `claimed_identity: "Zubair"` is an unverified assertion until both spoken digit liveness check AND cosine similarity verification succeed.
+3. **IoT Device Identity (`IdentityType.IOT_DEVICE`):**
+   - **Authentication:** Cryptographic Pre-Shared Key (PSK) or HMAC signature (`X-Device-Key` header verified against hashed device tokens stored in database).
+   - **Authority:** Validates that the client requesting challenge issuance or verification is an authorized physical kiosk or door relay terminal.
+   - **Crucial Rule:** Supplying a `device_id` without a cryptographically verifiable secret is strictly rejected. A device cannot list enrolled speakers or enroll new users.
+
+---
+
+## 6. Role-Based Access Control (RBAC) & Endpoint Matrix
+
+| Endpoint | Method | Auth Scheme | Required Permissions | Allowed Roles | Security Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `GET /` | GET | `Public` | `health:read` | `Anonymous`, `User`, `Device`, `Admin` | System health and load balancer discovery. Exposes only online status; hides thresholds and counts. |
+| `GET /speakers` | GET | `FirebaseJWT` | `speakers:list` | `Admin` | Directory listing. Restricted to prevent employee enumeration and targeted biometric harvesting. |
+| `POST /challenge` | POST | `Either` (JWT or DeviceKey) | `challenge:create` | `Device`, `User`, `Admin` | Challenge digit generation. Requires authenticated caller to prevent in-memory store flooding. |
+| `POST /verify` | POST | `Either` (JWT or DeviceKey) | `verify:biometric` | `Device`, `User`, `Admin` | 1-to-1 door access verification. Early invalidation enforces single-attempt consumption before audio I/O. |
+| `POST /identify` | POST | `FirebaseJWT` | `identify:biometric` | `Admin` | 1-to-N unconstrained speaker identification. Restricted to Admin due to biometric probing risk. |
+| `WS /ws/identify` | WS | `FirebaseJWT` | `identify:biometric` | `Admin` | Real-time streaming identification. Restricted to Admin with connection and frame limits. |
+
+---
+
+## 7. Authentication Flow Architecture
+
+### Web User Access Flow:
+```
+[User Browser] ──(1. Login)──► [Firebase Auth]
+       │                              │
+       │◄───(2. ID Token JWT)─────────┘
+       │
+       ▼ (3. HTTP Request with Authorization: Bearer <ID_TOKEN>)
+[FastAPI Backend]
+       ├── (4. Verify Signature via Firebase Admin SDK & Google JWKS)
+       ├── (5. Extract UID and Custom Role Claims: admin/user)
+       └── (6. Authorize Route via app/core/auth_policy.py)
+```
+
+### ESP32 Device Terminal Flow:
+```
+[ESP32 Hardware Terminal]
+       │
+       ▼ (1. POST /challenge with X-Device-ID: dev_front_door_01, X-Device-Key: <TOKEN>)
+[FastAPI Backend]
+       ├── (2. Validate Device Key against hashed device registry)
+       ├── (3. Issue 3-digit CSPRNG challenge bound to device_id & session_id)
+       └── (4. Return challenge digits & 60s TTL)
+[ESP32 Hardware Terminal]
+       ├── (5. Prompt user: "Speak digits: 4 8 2")
+       ├── (6. Record audio from I2S microphone)
+       ▼ (7. POST /verify with audio, challenge_id, session_id, claimed_identity, X-Device-Key)
+[FastAPI Backend]
+       ├── (8. Validate Device Key & atomically consume challenge BEFORE upload spooling)
+       ├── (9. Run Vosk spoken digit liveness check; fail closed on mismatch)
+       ├── (10. Run SpeechBrain ECAPA-TDNN 1-to-1 verification against claimed_identity)
+       └── (11. Return JSON decision: {"accepted": true, "action": "UNLOCK", ...})
+[ESP32 Hardware Terminal]
+       └── (12. Trigger physical door relay if action == "UNLOCK")
+```
+
