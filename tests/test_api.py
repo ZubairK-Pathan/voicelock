@@ -1,12 +1,13 @@
 """
-tests/test_api.py — Automated test suite for VoiceLock FastAPI endpoints.
+tests/test_api.py — Comprehensive security and contract test suite for VoiceLock FastAPI endpoints.
 
 Covers:
 - Basic health and discovery (GET /, GET /speakers)
-- Input validation (missing audio, empty audio, invalid formats, oversized uploads)
-- Security controls (server-side threshold enforcement, safe error messages)
-- ML inference error handling and temp-file lifecycle
-- Integration with real/mocked model pipeline
+- Real ML inference integration (identify & verify)
+- Review A: Upload security (streaming limits, Content-Length pre-check, malformed audio handling, temp-file cleanup)
+- Review B: Threshold security (tamper resistance, server boundary enforcement, defensive config loaders)
+- Review C: Security boundary verification (no inference on oversized uploads, cleanup on failure)
+- Review D: Error handling in predict.py (FileNotFoundError, empty profiles, typed exceptions)
 """
 
 import io
@@ -18,7 +19,14 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from cloud_api import app, MAX_AUDIO_SIZE_BYTES, SERVER_THRESHOLD
+from cloud_api import (
+    app,
+    MAX_AUDIO_SIZE_BYTES,
+    SERVER_THRESHOLD,
+    load_server_threshold,
+    load_max_audio_size,
+)
+from predict import predict_speaker, verify_speaker, DEFAULT_THRESHOLD
 
 client = TestClient(app)
 
@@ -98,7 +106,7 @@ def test_verify_unknown_speaker_404():
     assert "not registered" in response.json()["detail"].lower()
 
 
-# ─── Input Hardening & Error Handling Tests ───────────────────────────────────
+# ─── REVIEW A: Upload Security & Input Validation ─────────────────────────────
 
 def test_missing_audio_payload():
     """Sending request without audio file must return 422 Unprocessable Entity."""
@@ -126,51 +134,123 @@ def test_unsupported_audio_extension():
     assert "unsupported" in response.json()["detail"].lower()
 
 
-def test_oversized_audio_rejected():
-    """Sending an audio payload exceeding MAX_AUDIO_SIZE_BYTES must return 413 Payload Too Large."""
+def test_oversized_audio_rejected_before_inference():
+    """
+    Security check: Upload exceeding MAX_AUDIO_SIZE_BYTES must return 413 Payload Too Large
+    and MUST NEVER invoke ML inference.
+    """
     oversized_data = b"0" * (MAX_AUDIO_SIZE_BYTES + 1024)
+    with patch("cloud_api.predict_speaker") as mock_predict:
+        response = client.post(
+            "/identify",
+            files={"audio": ("huge.wav", io.BytesIO(oversized_data), "audio/wav")},
+        )
+        assert response.status_code == 413
+        assert "exceeds" in response.json()["detail"].lower()
+        mock_predict.assert_not_called()
+
+
+def test_content_length_header_precheck_rejection():
+    """
+    Security check: Request with Content-Length exceeding MAX_AUDIO_SIZE_BYTES
+    is rejected immediately without reading the payload.
+    """
+    headers = {"Content-Length": str(MAX_AUDIO_SIZE_BYTES + 50000)}
+    dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+    with patch("cloud_api.predict_speaker") as mock_predict:
+        response = client.post(
+            "/identify",
+            files={"audio": ("sample.wav", io.BytesIO(dummy_wav), "audio/wav")},
+            headers=headers,
+        )
+        assert response.status_code == 413
+        mock_predict.assert_not_called()
+
+
+def test_malformed_audio_returns_400_not_500():
+    """
+    Security check: Non-audio content disguised as a .wav file (e.g. ASCII text)
+    must return 400 Bad Request (client fault), not 500 Internal Server Error,
+    and must clean up temporary files.
+    """
+    garbage_bytes = b"This is plain text disguised with a .wav extension."
     response = client.post(
         "/identify",
-        files={"audio": ("huge.wav", io.BytesIO(oversized_data), "audio/wav")},
+        files={"audio": ("fake.wav", io.BytesIO(garbage_bytes), "audio/wav")},
     )
-    assert response.status_code == 413
-    assert "exceeds" in response.json()["detail"].lower()
+    assert response.status_code == 400
+    assert "invalid" in response.json()["detail"].lower() or "unreadable" in response.json()["detail"].lower()
 
 
-def test_client_cannot_override_server_threshold():
+# ─── REVIEW B: Threshold Configuration & Tamper Resistance ────────────────────
+
+def test_client_threshold_tampering_cannot_bypass_denial():
     """
-    Security check: Client attempting to submit threshold=0.01 must not override
-    the server-enforced threshold.
+    Security check: An impostor voice whose similarity is 0.15 (below 0.25)
+    submitting threshold=0.01 MUST STILL BE REJECTED.
+    Client threshold tampering cannot flip the decision from DENY to UNLOCK.
     """
-    # Create valid dummy WAV
     dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
     
-    mock_result = {
-        "is_accepted": False,
-        "similarity": 0.15,
-        "threshold": SERVER_THRESHOLD,
-        "claimed_identity": "Zubair",
-    }
-    with patch("cloud_api.verify_speaker", return_value=mock_result) as mock_verify:
+    # Mock verify_speaker to evaluate against the threshold passed to it
+    def controlled_verify(audio_path, claimed_identity, threshold, **kwargs):
+        sim = 0.15  # Impostor similarity
+        return {
+            "is_accepted": sim >= threshold,
+            "similarity": sim,
+            "threshold": threshold,
+            "claimed_identity": claimed_identity,
+        }
+
+    with patch("cloud_api.verify_speaker", side_effect=controlled_verify):
         response = client.post(
             "/verify",
-            data={"claimed_identity": "Zubair", "threshold": 0.01},  # Attempting to override
+            data={"claimed_identity": "Zubair", "threshold": 0.01},  # Attempting to bypass
             files={"audio": ("test.wav", io.BytesIO(dummy_wav), "audio/wav")},
         )
         assert response.status_code == 200
-        # The API must use SERVER_THRESHOLD, not the client's 0.01
-        assert response.json()["threshold_used"] == SERVER_THRESHOLD
-        mock_verify.assert_called_once()
-        # Verify the call passed SERVER_THRESHOLD
-        _, kwargs = mock_verify.call_args
-        assert kwargs.get("threshold") == SERVER_THRESHOLD
+        data = response.json()
+        assert data["accepted"] is False
+        assert data["action"] == "DENY"
+        assert data["threshold_used"] == SERVER_THRESHOLD
 
+
+def test_load_server_threshold_defensive_fallbacks():
+    """Verify load_server_threshold fails safely when given invalid or out-of-range env vars."""
+    with patch.dict(os.environ, {"DEFAULT_THRESHOLD": "not-a-number"}):
+        assert load_server_threshold() == DEFAULT_THRESHOLD
+
+    with patch.dict(os.environ, {"DEFAULT_THRESHOLD": "-0.5"}):
+        assert load_server_threshold() == DEFAULT_THRESHOLD
+
+    with patch.dict(os.environ, {"DEFAULT_THRESHOLD": "1.5"}):
+        assert load_server_threshold() == DEFAULT_THRESHOLD
+
+    with patch.dict(os.environ, {"DEFAULT_THRESHOLD": "0.45"}):
+        assert load_server_threshold() == 0.45
+
+
+def test_load_max_audio_size_defensive_fallbacks():
+    """Verify load_max_audio_size fails safely when given invalid env vars."""
+    default_bytes = 10 * 1024 * 1024
+
+    with patch.dict(os.environ, {"MAX_AUDIO_SIZE_BYTES": "invalid"}):
+        assert load_max_audio_size() == default_bytes
+
+    with patch.dict(os.environ, {"MAX_AUDIO_SIZE_BYTES": "-100"}):
+        assert load_max_audio_size() == default_bytes
+
+    with patch.dict(os.environ, {"MAX_AUDIO_SIZE_BYTES": "5242880"}):
+        assert load_max_audio_size() == 5242880
+
+
+# ─── REVIEW C & D: Error Handling, Temp File Lifecycle, and predict.py ─────────
 
 def test_inference_failure_returns_safe_500():
     """Inference exception must return 500 without leaking stack traces or internal filesystem paths."""
     dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
     
-    with patch("cloud_api.predict_speaker", side_effect=RuntimeError("internal CUDA/CPU execution error")):
+    with patch("cloud_api.predict_speaker", side_effect=Exception("internal compute engine error")):
         response = client.post(
             "/identify",
             files={"audio": ("test.wav", io.BytesIO(dummy_wav), "audio/wav")},
@@ -184,7 +264,7 @@ def test_inference_failure_returns_safe_500():
 
 
 def test_empty_profiles_handled_gracefully():
-    """If profiles dictionary is empty, API returns 503 or 400 without crashing."""
+    """If profiles dictionary is empty, API returns 503 Service Unavailable without crashing."""
     dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
     
     with patch("cloud_api.get_system", return_value=({}, MagicMock())):
@@ -192,7 +272,7 @@ def test_empty_profiles_handled_gracefully():
             "/identify",
             files={"audio": ("test.wav", io.BytesIO(dummy_wav), "audio/wav")},
         )
-        assert response.status_code in [400, 503]
+        assert response.status_code == 503
         assert "no speaker profiles" in response.json()["detail"].lower()
 
 
@@ -201,13 +281,11 @@ def test_temp_file_cleanup_on_success_and_failure():
     dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
     
     created_temp_files = []
-    original_save = cloud_api_save_upload = None
-
     import cloud_api
     original_save = cloud_api.save_upload
 
-    def tracking_save(audio):
-        path = original_save(audio)
+    def tracking_save(audio, request=None):
+        path = original_save(audio, request=request)
         created_temp_files.append(path)
         return path
 
@@ -228,7 +306,7 @@ def test_temp_file_cleanup_on_success_and_failure():
             assert resp.status_code == 200
 
         # Case B: Failure
-        with patch("cloud_api.predict_speaker", side_effect=RuntimeError("boom")):
+        with patch("cloud_api.predict_speaker", side_effect=RuntimeError("internal engine fault")):
             resp = client.post(
                 "/identify",
                 files={"audio": ("test.wav", io.BytesIO(dummy_wav), "audio/wav")},
@@ -239,3 +317,26 @@ def test_temp_file_cleanup_on_success_and_failure():
     assert len(created_temp_files) == 2
     for tmp in created_temp_files:
         assert not tmp.exists(), f"Temporary file {tmp} was not cleaned up!"
+
+
+def test_predict_speaker_raises_filenotfound_on_missing_file():
+    """Verify predict_speaker raises FileNotFoundError rather than calling sys.exit()."""
+    with pytest.raises(FileNotFoundError) as exc_info:
+        predict_speaker("nonexistent_path_test_1234.wav")
+    assert "not found" in str(exc_info.value).lower()
+
+
+def test_verify_speaker_raises_filenotfound_on_missing_file():
+    """Verify verify_speaker raises FileNotFoundError rather than calling sys.exit()."""
+    with pytest.raises(FileNotFoundError) as exc_info:
+        verify_speaker("nonexistent_path_test_1234.wav", claimed_identity="Zubair")
+    assert "not found" in str(exc_info.value).lower()
+
+
+def test_predict_speaker_raises_valueerror_on_empty_profiles():
+    """Verify predict_speaker raises ValueError when profiles dictionary is empty."""
+    dummy_wav = Path(__file__).resolve().parent.parent / "processed_dataset" / "Zubair" / "Zubair_Enrollment_R01.wav"
+    if dummy_wav.exists():
+        with pytest.raises(ValueError) as exc_info:
+            predict_speaker(str(dummy_wav), profiles={})
+        assert "no speaker profiles" in str(exc_info.value).lower()

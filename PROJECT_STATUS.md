@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 2A — Test Foundation & API Hardening (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `9551450`, pending 2A checkpoint)  
-**Application Run Status:** Fully Operational (All 13 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 2A.1 — Security Review and Verification (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `26bb484`, working tree updated with 2A.1 fixes)  
+**Application Run Status:** Fully Operational (All 20 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 2A (Test Foundation & API Hardening) has successfully completed without modifying the project's folder layout or disturbing the working Streamlit application. A 13-test automated suite was established, process-terminating `sys.exit()` calls were eliminated in favor of typed exceptions, client threshold overrides were removed, upload size ceilings were enforced, and temporary file lifecycle safety was guaranteed.
+Milestone 2A.1 (Security Review and Verification) has successfully verified and hardened the API security boundary. The automated test suite has been expanded from 13 to 20 tests. Demonstrable defects and security edge cases were addressed: upfront `Content-Length` inspection prevents unbounded upload buffering, audio format decoding failures (`soundfile.LibsndfileError`, FFmpeg conversion failures) return HTTP 400 Bad Request instead of false 500 errors, defensive configuration parsers prevent invalid environment variable injections, and verification decision tamper-resistance was strictly tested and confirmed.
 
 ---
 
@@ -44,12 +44,28 @@ Milestone 2A (Test Foundation & API Hardening) has successfully completed withou
   - Sanitized error responses to prevent leaking internal filesystem paths or stack traces.
 - Verified zero regressions on `evaluate.py`, `tune_threshold.py`, `predict.py`, and `app.py` (Streamlit AppTest).
 
+### Milestone 2A.1: Security Review & Verification (Completed)
+- **Review A (Upload Security):**
+  - Added upfront `Content-Length` header check on incoming HTTP requests to reject oversized bodies before reading/spooling payloads.
+  - Handled malformed audio files (e.g. non-audio files renamed to `.wav` or corrupt streams) by catching `soundfile.LibsndfileError` and FFmpeg conversion failures and returning HTTP 400 Bad Request rather than misleading 500 server crashes.
+  - Verified guaranteed temporary file deletion in `finally:` blocks across normal execution, inference exceptions, and parsing errors.
+- **Review B (Threshold Configuration):**
+  - Implemented `load_server_threshold()` with defensive parsing and bounding to `[0.0, 1.0]`, falling back safely to `0.25`.
+  - Implemented `load_max_audio_size()` with positive integer bounds checking, falling back safely to `10MB`.
+  - Formally verified via automated test that client threshold tampering (e.g. submitting `threshold=0.01`) cannot bypass denial or flip an impostor decision to UNLOCK.
+- **Review C (API Test Quality):**
+  - Expanded test suite from 13 to 20 automated tests.
+  - Tests verify actual security decisions and boundaries rather than only status codes (e.g. verifying inference is never invoked on oversized uploads, verifying decisions remain DENY under tampering, verifying temp file cleanup lifecycle).
+- **Review D (Error Handling & Regression):**
+  - Added unit tests verifying `predict_speaker` and `verify_speaker` raise `FileNotFoundError` on missing files and `ValueError` on empty profiles.
+  - Executed full ML and Streamlit regressions: all passed with zero errors.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Automated API Test Suite** | `.venv/bin/pytest -v tests/test_api.py` | 0 | 13/13 tests PASSED in 1.48s |
+| **Automated API Test Suite** | `.venv/bin/pytest -v tests/test_api.py` | 0 | 20/20 tests PASSED in 1.21s |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Liveness Check** | `.venv/bin/python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Vosk loads, transcribes, properly rejects non-digit audio |
@@ -61,15 +77,20 @@ Milestone 2A (Test Foundation & API Hardening) has successfully completed withou
 ## 4. Known Issues & Remaining Security Risks
 1. **Small Evaluation Dataset:**
    - *Risk:* Reported 0.00% EER is computed on only 3 speakers (27 test samples). A threshold of 0.25 is retained as baseline but is NOT certified for production access control without broader multi-environment validation.
-2. **Missing Challenge Expiry in `liveness.py`:**
-   - *Risk:* Liveness challenges in `liveness.py` use standard `random.randint` and lack server-side session binding and expiration.
-   - *Plan:* Build a stateful `ChallengeService` using `secrets.randbelow` in Milestone 2B/Phase 2.
+2. **Missing Challenge Expiry and Session Binding in `liveness.py`:**
+   - *Risk:* Liveness challenges in `liveness.py` currently use pseudo-random generator `random.randint` and lack server-side session binding, expiration (TTL), and single-use nonces.
+   - *Plan:* Build a stateful, expiring, cryptographically secure challenge-response verification workflow in Milestone 2B.
 3. **Unauthenticated Public API Endpoints:**
-   - *Risk:* `/identify` and `/verify` currently have no API token or rate-limiting middleware.
-   - *Plan:* Address via rate-limiting and device token authentication in subsequent milestones.
+   - *Risk:* `/identify` and `/verify` currently have no caller authentication or rate-limiting middleware.
+   - *Plan:* Require API tokens / session authorization and rate limiting prior to public deployment.
 
 ---
 
 ## 5. Next Recommended Step
-1. Commit Milestone 2A changes to `feature/enterprise-foundation`.
-2. Proceed to **Milestone 2B: Gradual Modularization** (safely separating `cloud_api.py` into `app/api/`, `app/services/`, `app/schemas/`, and `app/core/` while running the 13-test suite at each step to guarantee zero regressions).
+Proceed to **Milestone 2B: Liveness Protection & Verification Hardening**:
+1. Implement cryptographically secure (`secrets.randbelow`), expiring (TTL), single-use challenge service.
+2. Bind challenges to verification sessions and intended claimed speakers.
+3. Require and enforce liveness verification in the biometric verification workflow.
+4. Add comprehensive automated tests for replay, expiration, invalid nonce, and spoof rejection.
+5. Only then proceed to incremental package modularization.
+

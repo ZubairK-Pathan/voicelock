@@ -37,17 +37,55 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import soundfile as sf
 import uvicorn
 
 from predict import predict_speaker, verify_speaker, DEFAULT_THRESHOLD
 from audio_utils import load_embedding_model, load_profiles
 
 # ─── Configuration & Security Defaults ───────────────────────────────────────
-SERVER_THRESHOLD = float(os.getenv("DEFAULT_THRESHOLD", str(DEFAULT_THRESHOLD)))
-MAX_AUDIO_SIZE_BYTES = int(os.getenv("MAX_AUDIO_SIZE_BYTES", str(10 * 1024 * 1024)))  # 10 MB limit
+
+def load_server_threshold() -> float:
+    """
+    Load and validate the server-side acceptance threshold.
+    Guarantees a valid float bounded in [0.0, 1.0].
+    Defaults safely to DEFAULT_THRESHOLD (0.25) if invalid or absent.
+    """
+    raw = os.getenv("DEFAULT_THRESHOLD")
+    if raw is None or not raw.strip():
+        return DEFAULT_THRESHOLD
+    try:
+        val = float(raw.strip())
+        if 0.0 <= val <= 1.0:
+            return val
+    except (ValueError, TypeError):
+        pass
+    return DEFAULT_THRESHOLD
+
+
+def load_max_audio_size() -> int:
+    """
+    Load and validate the maximum allowed upload size in bytes.
+    Defaults to 10 MB (10,485,760 bytes) if invalid or absent.
+    """
+    default_size = 10 * 1024 * 1024  # 10 MB
+    raw = os.getenv("MAX_AUDIO_SIZE_BYTES")
+    if raw is None or not raw.strip():
+        return default_size
+    try:
+        val = int(raw.strip())
+        if val > 0:
+            return val
+    except (ValueError, TypeError):
+        pass
+    return default_size
+
+
+SERVER_THRESHOLD = load_server_threshold()
+MAX_AUDIO_SIZE_BYTES = load_max_audio_size()
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
 
 app = FastAPI(
@@ -76,12 +114,27 @@ def get_system():
     return _profiles, _classifier
 
 
-def save_upload(audio: UploadFile) -> Path:
+def save_upload(audio: UploadFile, request: Optional[Request] = None) -> Path:
     """
     Validate and save uploaded audio bytes to a temporary file.
     Enforces allowed extensions and strict file size limits (MAX_AUDIO_SIZE_BYTES).
-    Cleans up the temporary file on error.
+    Checks Content-Length upfront if available, and streams in chunks.
+    Cleans up the temporary file immediately on error.
     """
+    # 1. Upfront Content-Length check if request is provided
+    if request is not None:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_AUDIO_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Audio file exceeds maximum allowed size ({MAX_AUDIO_SIZE_BYTES // (1024 * 1024)} MB).",
+                    )
+            except ValueError:
+                pass
+
+    # 2. Filename and extension validation
     if not audio.filename:
         raise HTTPException(status_code=400, detail="Missing filename in audio upload.")
 
@@ -149,6 +202,7 @@ def list_speakers():
 
 @app.post("/identify")
 async def identify(
+    request: Request,
     audio: UploadFile = File(..., description="WAV/MP3/M4A audio file"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
 ):
@@ -160,7 +214,7 @@ async def identify(
     if not profiles:
         raise HTTPException(status_code=503, detail="No speaker profiles are enrolled in the system.")
 
-    tmp_path = save_upload(audio)
+    tmp_path = save_upload(audio, request=request)
     try:
         result = predict_speaker(
             audio_path=str(tmp_path),
@@ -178,8 +232,13 @@ async def identify(
         }
     except HTTPException:
         raise
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+    except (ValueError, sf.LibsndfileError) as err:
+        raise HTTPException(status_code=400, detail=f"Invalid or unreadable audio content: {err}")
+    except RuntimeError as re:
+        err_msg = str(re).lower()
+        if "ffmpeg" in err_msg or "conversion failed" in err_msg:
+            raise HTTPException(status_code=400, detail="Invalid audio stream or unreadable format.")
+        raise HTTPException(status_code=500, detail="Biometric identification inference failed.")
     except Exception:
         raise HTTPException(status_code=500, detail="Biometric identification inference failed.")
     finally:
@@ -192,6 +251,7 @@ async def identify(
 
 @app.post("/verify")
 async def verify(
+    request: Request,
     audio: UploadFile = File(..., description="WAV/MP3/M4A audio file"),
     claimed_identity: str = Form(..., description="Name of the speaker being claimed"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
@@ -211,7 +271,7 @@ async def verify(
             detail=f"Speaker '{claimed_identity}' is not registered."
         )
 
-    tmp_path = save_upload(audio)
+    tmp_path = save_upload(audio, request=request)
     try:
         result = verify_speaker(
             audio_path=str(tmp_path),
@@ -230,8 +290,13 @@ async def verify(
         }
     except HTTPException:
         raise
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+    except (ValueError, sf.LibsndfileError) as err:
+        raise HTTPException(status_code=400, detail=f"Invalid or unreadable audio content: {err}")
+    except RuntimeError as re:
+        err_msg = str(re).lower()
+        if "ffmpeg" in err_msg or "conversion failed" in err_msg:
+            raise HTTPException(status_code=400, detail="Invalid audio stream or unreadable format.")
+        raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
     except Exception:
         raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
     finally:
