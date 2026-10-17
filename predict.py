@@ -41,11 +41,13 @@ def predict_speaker(
     audio_path = Path(audio_path)
 
     if not audio_path.exists():
-        print(f"✗ File not found: {audio_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     if profiles is None:
         profiles = load_profiles()
+
+    if not profiles:
+        raise ValueError("No speaker profiles are enrolled in the system.")
 
     if classifier is None:
         device = get_device()
@@ -123,11 +125,13 @@ def verify_speaker(
     """
     audio_path = Path(audio_path)
     if not audio_path.exists():
-        print(f"✗ File not found: {audio_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     if profiles is None:
         profiles = load_profiles()
+
+    if not profiles:
+        raise ValueError("No speaker profiles are enrolled in the system.")
         
     if claimed_identity not in profiles:
         raise ValueError(f"Unknown claimed identity: {claimed_identity}. Registered speakers: {list(profiles.keys())}")
@@ -184,7 +188,11 @@ def main():
     )
 
     args = parser.parse_args()
-    predict_speaker(args.audio_path, threshold=args.threshold)
+    try:
+        predict_speaker(args.audio_path, threshold=args.threshold)
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
