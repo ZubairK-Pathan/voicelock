@@ -3,9 +3,10 @@ app/api/routes_speakers.py — Enrolled speaker listing route.
 """
 
 import sys
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 import app.services.speaker_service as speaker_service
 from app.schemas.verification import SpeakersResponse
+from app.core.auth import AuthenticatedUser, get_current_admin
 
 router = APIRouter(tags=["Speakers"])
 
@@ -18,8 +19,8 @@ def _get_system():
 
 
 @router.get("/speakers", response_model=SpeakersResponse)
-def list_speakers():
-    """List all registered speaker names currently enrolled in VoiceLock."""
+def list_speakers(admin: AuthenticatedUser = Depends(get_current_admin)):
+    """List all registered speaker names currently enrolled in VoiceLock. Restricted to Admin."""
     get_sys = _get_system()
     profiles, _ = get_sys()
     names = sorted(profiles.keys()) if profiles else []

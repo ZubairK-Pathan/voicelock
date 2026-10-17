@@ -62,6 +62,30 @@ from app.services.challenge_service import (
     generate_challenge,
 )
 
+# Re-export authentication and authorization utilities
+from app.core.auth import (
+    AuthenticatedUser,
+    get_current_user,
+    get_current_admin,
+    require_permission,
+    authenticate_ws_admin,
+    verify_firebase_id_token,
+    set_test_token_verifier,
+    get_firebase_app,
+)
+from app.core.auth_policy import (
+    IdentityType,
+    Role,
+    AuthScheme,
+    Permission,
+    ROLE_PERMISSIONS,
+    EndpointPolicy,
+    ENDPOINT_POLICIES,
+    has_permission,
+    get_endpoint_policy,
+    is_public_endpoint,
+)
+
 # Re-export application instance and factory
 from app.main import app, create_app
 
@@ -91,6 +115,24 @@ __all__ = [
     "LivenessChallenge",
     "ChallengeStatus",
     "generate_challenge",
+    "AuthenticatedUser",
+    "get_current_user",
+    "get_current_admin",
+    "require_permission",
+    "authenticate_ws_admin",
+    "verify_firebase_id_token",
+    "set_test_token_verifier",
+    "get_firebase_app",
+    "IdentityType",
+    "Role",
+    "AuthScheme",
+    "Permission",
+    "ROLE_PERMISSIONS",
+    "EndpointPolicy",
+    "ENDPOINT_POLICIES",
+    "has_permission",
+    "get_endpoint_policy",
+    "is_public_endpoint",
 ]
 
 if __name__ == "__main__":

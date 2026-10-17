@@ -33,5 +33,5 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Service status ('online')")
     service: str = Field(..., description="Descriptive service name")
     version: str = Field(..., description="Service semantic version")
-    threshold: float = Field(..., description="Active server threshold")
-    enrolled_speakers: int = Field(..., description="Count of currently enrolled speaker voiceprints")
+    threshold: Optional[float] = Field(None, description="Active server threshold (redacted in public health)")
+    enrolled_speakers: Optional[int] = Field(None, description="Count of currently enrolled speaker voiceprints (redacted in public health)")

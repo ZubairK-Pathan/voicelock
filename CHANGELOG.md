@@ -10,6 +10,22 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Implemented server-side Firebase ID-token verification module `app/core/auth.py` using `firebase-admin` (v7.7.0):
+  - Single-instance lifecycle initialization (`get_firebase_app`) with ADC and service account support.
+  - Strict production fail-closed security preventing insecure fallbacks and mock verifier execution in production.
+  - Token extraction, schema validation, signature verification, and expiration enforcement.
+  - Mandatory token revocation checking (`check_revoked=True`) on sensitive administrative endpoints.
+  - Trusted server-side role resolution from verified token claims or server-side environment lists (`ADMIN_EMAILS`, `ADMIN_UIDS`), rejecting client role tampering.
+  - Handshake-based WebSocket administrative authentication helper (`authenticate_ws_admin`).
+- Enforced Role-Based Access Control (RBAC) across FastAPI endpoints:
+  - `GET /`: Hardened public health discovery returning only non-sensitive metadata (redacted threshold and speaker counts).
+  - `GET /speakers`: Restricted strictly to `Role.ADMIN` with token revocation check.
+  - `POST /identify`: Restricted strictly to `Role.ADMIN` with token revocation check.
+  - `POST /challenge`: Restricted to authenticated web users (`Role.USER` or `Role.ADMIN`).
+  - `POST /verify`: Restricted to authenticated web users (`Role.USER` or `Role.ADMIN`), preserving challenge binding, single-use invalidation, liveness check, and server-controlled threshold.
+  - `WS /ws/identify`: Restricted to `Role.ADMIN` via initial JSON auth handshake frame before audio streaming.
+- Added comprehensive 21-test security test suite in `tests/test_auth.py` covering missing/malformed headers, invalid/expired/revoked tokens, role tampering, bootstrap role assignment, production environment guards, and WebSocket authentication.
+- Expanded total automated test suite to 63 passing tests across API, security, and policy domains.
 - Created declarative authentication policy module `app/core/auth_policy.py` defining:
   - Strict decoupling between `IdentityType.WEB_USER`, `IdentityType.SPEAKER_VOICE`, and `IdentityType.IOT_DEVICE`.
   - Role-Based Access Control (`Role.ADMIN`, `Role.USER`, `Role.DEVICE`, `Role.ANONYMOUS`).

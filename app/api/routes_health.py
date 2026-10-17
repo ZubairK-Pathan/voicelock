@@ -21,13 +21,9 @@ def _get_system():
 @router.get("/", response_model=HealthResponse)
 def root():
     """Service health check and basic system capabilities discovery."""
-    get_sys = _get_system()
-    profiles, _ = get_sys()
     return {
         "status": "online",
         "service": "VoiceLock — Speaker Recognition API",
         "version": "1.0.0",
-        "threshold": SERVER_THRESHOLD,
-        "enrolled_speakers": len(profiles) if profiles else 0,
     }
 

@@ -4,13 +4,14 @@ app/api/routes_challenges.py — Stateful liveness challenge generation endpoint
 
 import sys
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.schemas.challenge import ChallengeResponse
 from app.services.challenge_service import challenge_display
 import app.services.challenge_service as challenge_service
 import app.services.speaker_service as speaker_service
 from app.core.config import DEFAULT_CHALLENGE_TTL_SECONDS, DEFAULT_CHALLENGE_LENGTH
+from app.core.auth import AuthenticatedUser, get_current_user
 
 router = APIRouter(tags=["Liveness"])
 
@@ -30,10 +31,14 @@ def _get_challenge_store():
 
 
 @router.post("/challenge", response_model=ChallengeResponse)
-async def create_challenge(request: Request):
+async def create_challenge(
+    request: Request,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Generate an unpredictable, cryptographically secure 3-digit liveness challenge.
     Binds the challenge to a verification session and optionally to a claimed identity.
+    Requires authenticated web user or administrator.
     Expires in 60 seconds.
     """
     claimed_identity = None

@@ -8,11 +8,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import soundfile as sf
 
 from app.core.config import SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES
+from app.core.auth import AuthenticatedUser, get_current_user, get_current_admin, authenticate_ws_admin
 import app.services.speaker_service as speaker_service
 import app.services.challenge_service as challenge_service
 import app.services.verification_service as verification_service
@@ -69,10 +70,11 @@ async def identify(
     request: Request,
     audio: UploadFile = File(..., description="WAV/MP3/M4A audio file"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
+    admin: AuthenticatedUser = Depends(get_current_admin),
 ):
     """
     Identify the speaker in an uploaded audio file (1-to-N matching).
-    Enforces server-side threshold and bounded upload limits.
+    Enforces server-side threshold, bounded upload limits, and ADMIN privileges.
     """
     get_sys = _get_system()
     profiles, classifier = get_sys()
@@ -124,10 +126,12 @@ async def verify(
     challenge_id: Optional[str] = Form(None, description="Active liveness challenge ID"),
     session_id: Optional[str] = Form(None, description="Active verification session ID"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """
     Verify whether the audio matches the claimed speaker identity (1-to-1)
     AND satisfies the bound liveness challenge (anti-spoofing / anti-replay).
+    Requires authenticated web user or administrator.
     
     Security workflow:
     1. Validates registration of claimed identity.
@@ -233,9 +237,11 @@ async def verify(
 async def ws_identify(websocket: WebSocket):
     """
     WebSocket endpoint for real-time speaker identification.
+    Restricted to ADMIN. Requires initial authentication handshake before accepting audio.
     Enforces upload limits and server-side calibrated threshold.
     """
     await websocket.accept()
+    admin_user = await authenticate_ws_admin(websocket)
     get_sys = _get_system()
     profiles, classifier = get_sys()
 

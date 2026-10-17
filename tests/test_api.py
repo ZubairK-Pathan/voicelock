@@ -36,10 +36,28 @@ from liveness import (
     LivenessChallenge,
     generate_challenge,
 )
+from app.core.auth import get_current_user, get_current_admin, AuthenticatedUser
+from app.core.auth_policy import Role
 
 client = TestClient(app)
 
 SAMPLE_WAV = Path(__file__).resolve().parent.parent / "processed_dataset" / "Zubair" / "Zubair_Enrollment_R01.wav"
+
+
+@pytest.fixture(autouse=True)
+def override_auth_dependencies():
+    """Ensure baseline regression tests execute under an authenticated admin context."""
+    admin_user = AuthenticatedUser(
+        uid="test-admin-uid",
+        email="admin@voicelock.test",
+        email_verified=True,
+        roles=[Role.ADMIN, Role.USER],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+    app.dependency_overrides[get_current_admin] = lambda: admin_user
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_admin, None)
 
 
 # ─── Baseline Contract Tests ──────────────────────────────────────────────────

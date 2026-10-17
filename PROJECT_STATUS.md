@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3A — Authentication Design & Security Review (Completed)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `48b3919`, working tree updated with 3A implementation)  
-**Application Run Status:** Fully Operational (All 42 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3B.1 — Firebase Authentication, RBAC Enforcement, and Security Tests (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `e2f354f`, working tree updated with 3B.1 implementation)  
+**Application Run Status:** Fully Operational (All 63 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3A (Authentication Design and Security Review) has completed an in-depth security audit of the API surface, categorized 11 vulnerabilities ranked by severity, and established the declarative authentication and authorization architecture for VoiceLock Enterprise. The security model explicitly decouples three distinct identity domains: human Web Users (`IdentityType.WEB_USER`, authenticated via Firebase RS256 JWTs), passive Biometric Voiceprints (`IdentityType.SPEAKER_VOICE`, verified via 192-d ECAPA-TDNN embeddings and liveness), and IoT Hardware Terminals (`IdentityType.IOT_DEVICE`, authenticated via pre-shared secret keys / HMAC tokens). A new declarative access policy module (`app/core/auth_policy.py`) defines a formal Role-Based Access Control (RBAC) matrix across `Admin`, `User`, `Device`, and `Anonymous` roles with dedicated unit test coverage. The automated test suite has expanded to 42 passing tests with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
+Milestone 3B.1 has implemented server-side Firebase ID-token bearer authentication, trusted server-side role resolution, and granular Role-Based Access Control (RBAC) enforcement across all FastAPI endpoints. The implementation utilizes the official `firebase-admin` SDK (v7.7.0) with single-instance lifecycle management, supports token revocation checks (`check_revoked=True`) on sensitive administrative operations, and strictly rejects client-supplied role tampering (e.g. `admin=true` query/form parameters). Endpoints `/speakers` and `/identify` are restricted to `Role.ADMIN`, `/challenge` and `/verify` require authenticated callers (`Role.USER` or `Role.ADMIN`), `GET /` is hardened to return non-sensitive public health metadata only, and `/ws/identify` enforces an upfront JSON authentication handshake frame before streaming audio. A dedicated 21-test security test suite (`tests/test_auth.py`) covers token expiration, revocation, malformed schemes, unauthorized role escalation, WebSocket handshake rejection, and production safeguards. The automated test suite has expanded to 63 passing tests with zero regressions on the Streamlit reference application or SpeechBrain ML pipeline.
 
 ---
 
@@ -97,45 +97,70 @@ Milestone 3A (Authentication Design and Security Review) has completed an in-dep
 - **Automated Policy Tests:** Added `tests/test_auth_policy.py` (7 tests), expanding the test suite to 42 passing tests.
 - **Documentation Updates:** Comprehensive updates to `ARCHITECTURE.md`, `SECURITY.md`, `DECISIONS.md` (ADR 006), and `DEVELOPMENT.md`.
 
+### Milestone 3B.1: Firebase Authentication, RBAC Enforcement, and Security Tests (Completed)
+- **Server-Side Firebase ID-Token Verification (`app/core/auth.py`):**
+  - Utilizes official `firebase-admin` (v7.7.0) with single-instance initialization (`get_firebase_app`).
+  - Supports credential resolution via `FIREBASE_CREDENTIALS_PATH`, local development fallback (outside production), and Google Application Default Credentials (ADC) in production.
+  - Strict production fail-closed security: missing production credentials raise `RuntimeError`; test token verifier injection is prohibited when `VOICELOCK_ENV=production`.
+  - Rejection with standard HTTP 401 (`WWW-Authenticate: Bearer ...`) for missing, malformed, invalid, and expired tokens.
+  - Mandatory token revocation checking (`check_revoked=True`) on sensitive administrative operations.
+- **Trusted Server-Side Role Assignment:**
+  - Roles derived strictly from verified token custom claims (`admin: true`, `role: "admin"`, or `roles: [...]`) or server-side bootstrap environment lists (`ADMIN_EMAILS`, `ADMIN_UIDS`).
+  - Client-supplied claims, parameters (e.g. `?admin=true`), or request fields are never trusted.
+- **Endpoint Protection & Policy Alignment:**
+  - `GET /`: Hardened public health discovery (redacted `threshold` and `enrolled_speakers`).
+  - `GET /speakers`: Restricted strictly to `Role.ADMIN` with `check_revoked=True`.
+  - `POST /identify`: Restricted strictly to `Role.ADMIN` with `check_revoked=True`.
+  - `POST /challenge`: Restricted to authenticated web users (`Role.USER` or `Role.ADMIN`).
+  - `POST /verify`: Restricted to authenticated web users (`Role.USER` or `Role.ADMIN`). Decoupled from `claimed_identity`. Preserves stateful challenge binding, single-use invalidation, liveness check, and server-controlled threshold.
+  - `WS /ws/identify`: Restricted to `Role.ADMIN`. Enforces upfront JSON authentication handshake frame (`{"type": "auth", "token": "..."}`) within 5.0 seconds before streaming audio bytes. Closes unauthenticated or non-admin connections with code 1008.
+- **Comprehensive Security Test Suite (`tests/test_auth.py`):**
+  - Added 21 dedicated security tests covering missing bearer headers, malformed schemes, invalid signatures, expired tokens, revoked administrative tokens, unauthorized role escalation attempts, server-side bootstrap role assignment, production environment guards, WebSocket authentication handshake, challenge binding, and Streamlit independence.
+- **Zero Regressions:**
+  - Full test suite: 63 automated tests pass cleanly in 1.89s (35 API + 21 Auth Security + 7 Auth Policy).
+  - Evaluation: 27/27 correct, 100% accuracy.
+  - Calibration: EER 0.00% on test split.
+  - Single inference: Zubair recognized with similarity 0.8668.
+  - Streamlit `app.py` AppTest runs with zero crashes across all 4 tabs.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **42/42 tests PASSED in 1.48s** (35 API + 7 Auth Policy) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **63/63 tests PASSED in 1.89s** (35 API + 21 Auth Security + 7 Auth Policy) |
+| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **21/21 tests PASSED** (token verification, RBAC, revocation, WS auth) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
-| **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs with zero exceptions |
+| **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs with zero exceptions across 4 tabs |
 
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **API Endpoints Remain Unauthenticated in Working Tree:**
-   - *Status:* Milestone 3A established the design and policy framework; live enforcement middleware is scheduled for Milestone 3B.
-   - *Action:* Keep API private to local development until Milestone 3B authentication is applied.
-2. **Multipart Buffering in Starlette:**
-   - *Risk:* Starlette buffers multipart payloads before route handlers execute. An attacker omitting `Content-Length` can force disk writes.
-   - *Plan:* Add ASGI raw stream size limiter middleware in Milestone 3B.
-3. **In-Memory Challenge Store Single-Process Boundary:**
+1. **Multipart Buffering in Starlette (`SEC-004`):**
+   - *Risk:* Starlette buffers multipart payloads before route handlers execute. An attacker omitting `Content-Length` could force disk writes.
+   - *Plan:* Add ASGI raw stream size limiter middleware in Milestone 3B.2 prior to multipart parsing.
+2. **IoT Hardware Authentication Deferred (`SEC-001` partial):**
+   - *Status:* Web user authentication is fully implemented; physical IoT terminal authentication (`X-Device-Key` / HMAC) is scheduled for Milestone 3B.2.
+3. **In-Memory Challenge Store Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore` is local to a single Python process. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with Redis or PostgreSQL challenge store conforming to `BaseChallengeStore` in Milestone 3C.
-4. **Small Evaluation Dataset & Threshold Discordance:**
+4. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
    - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
    - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
-5. **Voice Cloning Limitations:**
+5. **Voice Cloning Limitations (`SEC-010`):**
    - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3B: Firebase ID-Token Verification & IoT Device Pre-Shared Key Middleware**:
-1. Implement Firebase ID token verification dependency (`verify_firebase_user`) using `firebase-admin.auth`.
-2. Implement IoT device token authentication dependency (`verify_device_token`) validating `X-Device-Key`.
-3. Add ASGI raw-body size limiter middleware to protect Starlette multipart buffer.
-4. Protect `/speakers`, `/challenge`, `/verify`, `/identify`, and `/ws/identify` according to the policy in `app/core/auth_policy.py`.
-5. Add automated tests covering missing, invalid, expired, and revoked tokens, as well as unauthorized role access attempts.
+Proceed to **Milestone 3B.2: IoT Device Authentication & ASGI Upload Limiter**:
+1. Implement IoT device authentication dependency (`get_current_device`) validating pre-shared keys (`X-Device-ID`, `X-Device-Key`).
+2. Implement ASGI raw-stream body size limiter middleware to protect Starlette from unconstrained disk buffering.
+3. Tighten CORS middleware in `app/main.py` with environment-controlled origins.
+4. Add rate limiting middleware (`slowapi`) on `/verify` and `/challenge`.
 
 
 
