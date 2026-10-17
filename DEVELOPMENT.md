@@ -50,14 +50,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ## 4. Running Tests & Baseline Verification
 
 ```bash
-# Run full automated test suite (89 tests)
+# Run full automated test suite (107 tests)
 pytest -v
 
 # Run targeted test suites
 pytest tests/test_api.py -v          # Baseline API contracts and upload limits (35 tests)
 pytest tests/test_auth.py -v         # Firebase Auth, RBAC, and WebSocket security (22 tests)
 pytest tests/test_auth_policy.py -v  # Policy matrix and identity separation (7 tests)
-pytest tests/test_device_auth.py -v  # IoT HMAC, ASGI limiter, CORS, rate limits (25 tests)
+pytest tests/test_device_auth.py -v  # IoT HMAC, ASGI limiter, CORS, rate limits (30 tests)
+pytest tests/test_database.py -v     # Database configuration, pooling, and Alembic (13 tests)
 ```
 
 ## 5. Running ML Scripts & Baseline Evaluation
@@ -104,7 +105,30 @@ python liveness.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"
 
 ---
 
-## 8. Incremental Delivery & GitHub Synchronization Policy
+## 8. Database Management & Alembic Migrations
+- **Configuration:** Set `DATABASE_URL` in `.env`.
+  - In development/testing: Defaults to local SQLite (`sqlite:///./voicelock.db`).
+  - In production: PostgreSQL (`postgresql+psycopg://user:password@host:port/dbname`). Missing `DATABASE_URL` raises `RuntimeError`.
+- **Applying Migrations:**
+  ```bash
+  alembic upgrade head
+  ```
+- **Rolling Back Migrations:**
+  ```bash
+  alembic downgrade -1     # Roll back single revision
+  alembic downgrade base   # Roll back all revisions
+  ```
+- **Creating Migrations:**
+  ```bash
+  alembic revision --autogenerate -m "describe migration"
+  ```
+- **Testing Details:**
+  - Automated tests in `tests/test_database.py` run against in-memory SQLite and a disposable temporary SQLite file.
+  - PostgreSQL pooling (`QueuePool`), timeout, and URL normalization are verified via mock configurations. Production PostgreSQL instances should be validated prior to multi-worker deployment.
+
+---
+
+## 9. Incremental Delivery & GitHub Synchronization Policy
 VoiceLock follows a strict incremental commit-and-push workflow for every completed task:
 1. **Implement a small, coherent change.**
 2. **Add or update targeted tests** covering happy paths, edge cases, and security boundaries.

@@ -39,6 +39,9 @@ speaker_profiles/
 results/
 .model_cache/
 fine_tuned_model/
+*.db
+*.sqlite
+*.sqlite3
 
 # IDE / Editor
 .vscode/

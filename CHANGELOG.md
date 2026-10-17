@@ -10,6 +10,24 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.1: SQLAlchemy 2.0 and Alembic Database Foundation**
+  - Implemented centralized database configuration and session management module `app/db/session.py`:
+    - Lazy engine and session factory initialization preventing premature connection creation during import or CLI script execution.
+    - Robust connection URL normalization (`postgres://` / `postgresql://` -> `postgresql+psycopg://`).
+    - Sensitive credential masking (`mask_database_url`) preventing password leakage in logs.
+    - Production fail-closed semantics: raises `RuntimeError` if `DATABASE_URL` is missing in production.
+    - Configured production connection pooling (`QueuePool`) with configurable size, overflow, timeout, recycle (1800s), and active keepalive verification (`pool_pre_ping=True`).
+    - Provided FastAPI dependency `get_db()` and context manager `get_db_context()` with automatic transaction commit/rollback and cleanup.
+  - Implemented declarative database base and initial verification model `app/db/base.py`:
+    - `Base(DeclarativeBase)` established as root for all SQLAlchemy 2.0 models.
+    - Initial schema verification table `SchemaInitialization` (`schema_initializations`).
+  - Re-exported core database utilities in `app/core/database.py` and `app/db/__init__.py`.
+  - Configured Alembic migration scaffolding (`alembic.ini`, `alembic/env.py`, `alembic/script.py.mako`):
+    - Dynamically resolves database connection from `get_database_url()`.
+    - Created initial migration `e32dc984b290_create_schema_initializations_table.py` and validated full upgrade/downgrade lifecycle against disposable test databases.
+  - Added comprehensive automated test suite `tests/test_database.py` (13 tests) covering URL normalization, production fail-closed behavior, password masking, connection pooling, session lifecycle, and Alembic upgrade/downgrade execution.
+  - Expanded total automated test suite from 94 to 107 passing tests.
+
 - **Milestone 3B.2: IoT Device Authentication, ASGI Request Protection, CORS Hardening, Rate Limiting**
   - Implemented IoT Device Authentication module `app/core/device_auth.py`:
     - Replay-resistant HMAC-SHA256 signature scheme using device identifier, timestamp, cryptographically random nonce, HTTP method/path, and SHA-256 body hash.

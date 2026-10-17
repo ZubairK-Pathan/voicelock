@@ -63,6 +63,15 @@ streamlit run app.py
 
 # Run FastAPI server
 uvicorn cloud_api:app --host 0.0.0.0 --port 8000
+
+# Apply database migrations
+alembic upgrade head
+
+# Rollback latest database migration
+alembic downgrade -1
+
+# Run database foundation tests
+pytest tests/test_database.py -v
 ```
 
 ---

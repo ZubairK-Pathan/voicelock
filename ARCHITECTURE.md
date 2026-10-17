@@ -238,3 +238,26 @@ Starlette’s default `MultiPartParser` buffers incoming uploads in memory and s
 3. **Inference Concurrency Semaphore:** `asyncio.Semaphore(4)` ensures that at most 4 parallel ECAPA-TDNN feature extractions can execute concurrently across HTTP and WebSocket endpoints, preventing CPU core starvation and denial of service.
 4. **Horizontal Scaling Boundary:** In-memory rate limiting and nonce stores are process-local. Distributed horizontal scaling across multiple instances requires shared Redis state (scheduled for Milestone 3C).
 
+---
+
+## 10. Database Architecture & Alembic Migrations (`app/db/`)
+
+Milestone 3C.1 establishes the durable storage foundation utilizing SQLAlchemy 2.0 and Alembic:
+
+### Architecture & Components
+1. **Declarative Base (`app/db/base.py`):**
+   - Standard SQLAlchemy 2.0 `DeclarativeBase` mapping typed attributes (`Mapped[T]`, `mapped_column()`).
+   - Initial migration verification entity: `SchemaInitialization` (`schema_initializations` table).
+2. **Session & Engine Lifecycle (`app/db/session.py`):**
+   - **Lazy Initialization:** Engines and session factories are instantiated on first use, avoiding premature database connections during module import, CLI usage, or test execution.
+   - **URL Normalization & Safe Masking:** Normalizes `postgres://` and `postgresql://` connection strings to `postgresql+psycopg://`. `mask_database_url()` redacts database passwords with `***` before logging.
+   - **Production Fail-Closed:** Missing `DATABASE_URL` in production immediately raises `RuntimeError`.
+   - **Connection Pooling:** PostgreSQL engines configure `QueuePool` with configurable `pool_size`, `max_overflow`, `pool_timeout`, `pool_recycle` (1800s), and `pool_pre_ping=True` (active keepalive verification). In-memory SQLite uses `StaticPool`.
+   - **Transaction Management:** Provides `get_db()` generator dependency for FastAPI request lifecycles and `@contextmanager get_db_context()` for CLI scripts and background workers.
+3. **Alembic Migration Pipeline (`alembic/`):**
+   - Configured via `alembic.ini` and `alembic/env.py`.
+   - `env.py` dynamically resolves connection parameters via `get_database_url()` and connects to `Base.metadata`.
+   - Initial migration `e32dc984b290_create_schema_initializations_table.py` validates upgrade and downgrade lifecycles against disposable databases.
+   - Domain entity migrations (speaker profiles, user identity mappings, device registrations, challenges, audit logs) are structured as sequential increments across 3C.2 to 3C.5.
+
+

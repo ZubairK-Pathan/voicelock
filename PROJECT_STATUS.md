@@ -1,23 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3B.2 — IoT Device Authentication, Request-Body Protection, CORS, Rate Limiting & Post-Review Hardening (Completed & Verified)  
-**Current Git State:** Branch `feature/enterprise-foundation` (commit `7172928`, working tree updated with review fixes)  
-**Application Run Status:** Fully Operational (All 94 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Current Milestone:** Milestone 3C.1 — SQLAlchemy 2.0 and Alembic Database Foundation (Completed)  
+**Current Git State:** Branch `feature/enterprise-foundation` (commit `cdc88c5`, working tree updated with 3C.1 implementation)  
+**Application Run Status:** Fully Operational (All 107 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3B.2 has comprehensively hardened the FastAPI service against IoT device spoofing, replay attacks, multipart buffer exhaustion, CORS vulnerabilities, and compute engine saturation. It introduces a separate IoT device authentication dependency (`get_current_device`) supporting dual schemes: a replay-resistant HMAC-SHA256 signature protocol (`X-Device-Signature`, `X-Device-Timestamp`, `X-Device-Nonce`) backed by a thread-safe sliding window `InMemoryNonceStore` and 300s clock drift window, as well as a pre-shared key fallback (`X-Device-Key`) over HTTPS with documented trade-offs. 
-
-Following a rigorous post-implementation security review, five additional defenses were added and verified:
-1. **Nonce Ordering Correction:** Constant-time HMAC signature verification precedes nonce recording, preventing unauthenticated clients from burning nonces.
-2. **Duplicate Header Rejection:** Strict 400 rejection for duplicate device headers mitigating HTTP smuggling.
-3. **Configurable Key Fallback:** Static `X-Device-Key` is strictly disabled by default in production (`VOICELOCK_ENABLE_DEVICE_KEY_FALLBACK`).
-4. **Negative Content-Length Defense:** Malformed negative lengths rejected upfront (HTTP 400).
-5. **WebSocket Session Lifetime Ceiling:** Capped at 300 seconds (disconnecting with WS 1008).
-
-Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom claims for admin privileges) and B (binding ordinary user verification strictly to their own enrolled voiceprint) have been fully enforced. The test suite has expanded to 94 passing automated tests with zero regressions on Streamlit or SpeechBrain ML workflows. A permanent incremental commit-and-push policy has been codified in `AGENTS.md` and `DEVELOPMENT.md`.
+Milestone 3C.1 establishes the durable database foundation for VoiceLock Enterprise using SQLAlchemy 2.0 and Alembic migration infrastructure. A centralized database module (`app/db/session.py`) provides lazy engine and session factory initialization (ensuring that imports and CLI scripts never initiate unsolicited database connections), robust URL normalization (`postgres://` / `postgresql://` -> `postgresql+psycopg://`), sensitive credential masking (`mask_database_url`), and fail-closed production safety (raising `RuntimeError` if `DATABASE_URL` is missing in production). Production PostgreSQL engines configure `QueuePool` with bounded size, overflow, timeout, 1800s connection recycling, and keepalive `pool_pre_ping=True`, while in-memory SQLite uses `StaticPool`. A foundational declarative base (`Base`) and migration verification entity (`SchemaInitialization`) are established in `app/db/base.py`. Alembic is configured with dynamic database URL resolution (`alembic/env.py`), and the initial migration (`e32dc984b290_create_schema_initializations_table.py`) has been fully validated with complete upgrade and downgrade cycles against disposable test databases. The test suite has expanded to 107 automated tests passing cleanly in 2.60s with zero regressions on Streamlit or SpeechBrain ML workflows.
 
 ---
 
@@ -162,13 +153,35 @@ Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom clai
   - Single inference: Zubair recognized with similarity 0.8668.
   - Streamlit `app.py` AppTest runs with zero crashes across all 4 tabs.
 
+### Milestone 3C.1: SQLAlchemy 2.0 & Alembic Database Foundation (Completed)
+- **Centralized Database Configuration (`app/db/session.py`):**
+  - Dynamic URL resolution via `get_database_url()` reading `DATABASE_URL` from environment.
+  - Automatic URL dialect normalization (`postgres://` / `postgresql://` -> `postgresql+psycopg://`).
+  - Credential masking utility (`mask_database_url`) preventing plaintext password leakage in logs.
+  - Fail-closed production safety: raises `RuntimeError` if `DATABASE_URL` is missing in production environments (`VOICELOCK_ENV=production`).
+  - Lazy initialization with `threading.RLock()`: avoids unsolicited database connections at module import time, preserving CLI scripts, ML inference, and Streamlit reference app.
+  - Production connection pooling: `QueuePool` with bounded size (`DB_POOL_SIZE=5`), max overflow (`DB_MAX_OVERFLOW=10`), connection recycle (`DB_POOL_RECYCLE=1800`), timeout (`DB_POOL_TIMEOUT=30.0`), and keepalive `pool_pre_ping=True`.
+  - In-memory SQLite support using `StaticPool` for local test isolation without external dependencies.
+  - FastAPI dependency `get_db()` and context manager `get_db_context()` supporting clean session lifecycle and transaction commit/rollback.
+- **Alembic Migration Infrastructure (`alembic.ini`, `alembic/`):**
+  - Alembic environment (`alembic/env.py`) configured with dynamic database URL resolution from `get_database_url()` and `Base.metadata`.
+  - Initial migration script (`e32dc984b290_create_schema_initializations_table.py`) creating foundational `schema_initializations` verification table.
+  - Verified complete migration lifecycle: automated test performs end-to-end `upgrade("head")`, schema inspection, and `downgrade("base")` against a disposable database.
+- **Declarative Schema Base (`app/db/base.py`):**
+  - SQLAlchemy 2.0 `DeclarativeBase` established.
+  - Minimal `SchemaInitialization` model recording database initialization timestamp and version.
+- **Automated Database Test Suite (`tests/test_database.py`):**
+  - Added 13 dedicated tests covering URL normalization, fail-closed production semantics, password masking, pool configuration, lazy initialization, transaction commit/rollback, FastAPI dependency, and full Alembic upgrade/downgrade lifecycle.
+  - Full test suite expanded to 107 passing tests in 2.60s with zero regressions.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **89/89 tests PASSED in 2.25s** (35 API + 22 Auth + 7 Policy + 25 Device Auth) |
-| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **25/25 tests PASSED** (HMAC, PSK, anti-replay, ASGI limiter, CORS, rate limits) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **107/107 tests PASSED in 2.60s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 13 Database) |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **13/13 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic migration cycle) |
+| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
 | **Baseline API Test Suite** | `.venv/bin/pytest tests/test_api.py -v` | 0 | **35/35 tests PASSED** (baseline contracts, upload limits, challenge lifecycle) |
@@ -182,7 +195,7 @@ Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom clai
 ## 4. Known Issues & Remaining Security Risks
 1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with Redis or PostgreSQL challenge store, distributed rate limiting, and durable nonce cache in Milestone 3C.
+   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.2–3C.4).
 2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
 3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
@@ -194,11 +207,11 @@ Furthermore, Reviewer Corrections A (never blindly trusting Firebase custom clai
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C: PostgreSQL Persistence & Shared Challenge Storage**:
-1. Implement SQLAlchemy 2.0 async models and Alembic migrations for users, roles, devices, and challenge records.
-2. Implement durable challenge store and device credential registry backed by PostgreSQL.
-3. Replace process-local challenge store to support multi-worker Uvicorn deployments.
-4. Establish audit event logging for biometric decisions and authentication attempts.
+Proceed to **Milestone 3C.2: Persistent Speaker Registry & User-to-Speaker Identity Mapping**:
+1. Implement SQLAlchemy 2.0 models and Alembic migrations for speaker profiles and user-to-speaker identity bindings.
+2. Establish repository layer for durable profile metadata while preserving raw 192-d biometric vectors.
+3. Update user authorization checks in `POST /verify` to query persistent identity bindings.
+4. Maintain full regression coverage and verify migrations against disposable test databases.
 
 
 
