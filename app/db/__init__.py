@@ -2,7 +2,7 @@
 app/db/__init__.py — Database package exports.
 """
 
-from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping
+from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping, DeviceRecord
 from app.repositories.speaker_repository import (
     SpeakerRepository,
     SpeakerRepositoryError,
@@ -32,6 +32,7 @@ __all__ = [
     "SchemaInitialization",
     "SpeakerRecord",
     "UserSpeakerMapping",
+    "DeviceRecord",
     "SpeakerRepository",
     "SpeakerRepositoryError",
     "DuplicateSpeakerError",

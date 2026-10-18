@@ -109,3 +109,49 @@ class UserSpeakerMapping(Base):
     speaker: Mapped["SpeakerRecord"] = relationship("SpeakerRecord", backref="user_mapping")
 
 
+class DeviceRecord(Base):
+    """
+    Durable hardware terminal (IoT access point) registry record.
+    Stores device identification, physical location metadata, cryptographic verifier
+    (secret hash), key versioning for zero-downtime rotation, and lifecycle status.
+
+    Security & Provisioning Architecture:
+    1. Zero Raw Credentials: Raw pre-shared keys and HMAC secrets are NEVER stored
+       in the database in plaintext. Only cryptographic hashes / derived verifiers
+       are stored in `secret_hash`.
+    2. Provisioning Flow: Terminal credentials are generated with high entropy (CSPRNG),
+       provisioned directly to device secure storage (e.g. ESP32 secure NVS / eFuse),
+       hashed, and stored in the registry.
+    3. Rotation Support: `key_version` provides version tracking for graceful credential
+       rotation without requiring immediate terminal downtime.
+    4. Identity Decoupling: Devices possess Role.DEVICE and cannot verify against user
+       mappings or impersonate web users.
+    5. Biometric Exclusion: Strictly avoids storing audio, voiceprints, or tokens.
+    """
+    __tablename__ = "devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    device_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    secret_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    key_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+
+
+

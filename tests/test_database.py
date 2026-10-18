@@ -24,7 +24,7 @@ from sqlalchemy.pool import StaticPool, QueuePool
 from alembic.config import Config
 from alembic import command
 
-from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping
+from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping, DeviceRecord
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -440,6 +440,127 @@ def test_user_speaker_mappings_schema_migration_and_constraints(monkeypatch):
         engine_reup = create_db_engine(disposable_url)
         tables_reup = inspect(engine_reup).get_table_names()
         assert "user_speaker_mappings" in tables_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+def test_devices_schema_migration_and_constraints(monkeypatch):
+    """
+    Verify devices table creation, columns, unique constraints on device_id,
+    ORM mappings, lifecycle status, and single-revision migration rollback.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Migrate to head (runs all migrations including create_devices_table)
+        command.upgrade(alembic_cfg, "head")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "devices" in tables
+        assert "user_speaker_mappings" in tables
+        assert "speakers" in tables
+        assert "schema_initializations" in tables
+
+        # Verify columns and indexes via inspector
+        columns = {col["name"]: col for col in inspector.get_columns("devices")}
+        assert "id" in columns
+        assert "device_id" in columns
+        assert "name" in columns
+        assert "status" in columns
+        assert "secret_hash" in columns
+        assert "key_version" in columns
+        assert "created_at" in columns
+        assert "updated_at" in columns
+        assert "metadata_json" in columns
+
+        indexes = {idx["name"]: idx for idx in inspector.get_indexes("devices")}
+        assert "ix_devices_device_id" in indexes
+        assert indexes["ix_devices_device_id"]["unique"] == 1
+        engine.dispose()
+
+        # 2. Insert valid DeviceRecord via ORM session
+        with get_db_context() as session:
+            device = DeviceRecord(
+                device_id="esp32-door-portal-01",
+                name="Main Entrance Gate",
+                status="active",
+                secret_hash="sha256$mocked_credential_hash_value",
+                key_version=1,
+                metadata_json='{"location": "North Wing", "mac": "AA:BB:CC:DD:EE:FF"}',
+            )
+            session.add(device)
+
+        # 3. Query back and verify ORM fields, timestamps, and is_active property
+        with get_db_context() as session:
+            record = session.scalar(
+                select(DeviceRecord).where(
+                    DeviceRecord.device_id == "esp32-door-portal-01"
+                )
+            )
+            assert record is not None
+            assert record.device_id == "esp32-door-portal-01"
+            assert record.name == "Main Entrance Gate"
+            assert record.status == "active"
+            assert record.is_active is True
+            assert record.secret_hash == "sha256$mocked_credential_hash_value"
+            assert record.key_version == 1
+            assert record.metadata_json == '{"location": "North Wing", "mac": "AA:BB:CC:DD:EE:FF"}'
+            assert record.created_at is not None
+            assert record.updated_at is not None
+
+            # Test lifecycle status update to revoked
+            record.status = "revoked"
+            session.flush()
+            assert record.is_active is False
+
+        # 4. Enforce uniqueness: duplicate device_id must be rejected
+        with pytest.raises(IntegrityError):
+            with get_db_context() as session:
+                duplicate_device = DeviceRecord(
+                    device_id="esp32-door-portal-01",
+                    name="Duplicate Device",
+                    secret_hash="sha256$other_secret_hash",
+                )
+                session.add(duplicate_device)
+
+        reset_engine()
+
+        # 5. Single-revision rollback (316dea338f3b -> 0b98eaf9dc3e)
+        command.downgrade(alembic_cfg, "0b98eaf9dc3e")
+
+        engine_rb = create_db_engine(disposable_url)
+        inspector_rb = inspect(engine_rb)
+        tables_rb = inspector_rb.get_table_names()
+        assert "devices" not in tables_rb
+        assert "user_speaker_mappings" in tables_rb
+        assert "speakers" in tables_rb
+        assert "schema_initializations" in tables_rb
+        engine_rb.dispose()
+
+        # 6. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        tables_reup = inspect(engine_reup).get_table_names()
+        assert "devices" in tables_reup
         engine_reup.dispose()
 
     finally:

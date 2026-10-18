@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.2c.2 — Persistent User-to-Speaker Authorization Enforcement (Completed)  
+**Current Milestone:** Milestone 3C.3a — Device Registry Schema and Migration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (All 140 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (All 141 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.2c.2 completes the enforcement of persistent, database-backed authorization for biometric verification. Ordinary authenticated web users are strictly restricted to verifying only the specific enrolled speaker identity bound to their Firebase UID in the `user_speaker_mappings` table. In accordance with zero-trust principles, client-supplied UIDs, roles, email prefixes, or custom claims are never accepted as proof of identity. If a user has no mapping or attempts to verify an arbitrary speaker, the request is rejected with HTTP 403 Forbidden *before* audio persistence and *before* ML inference slots are acquired. Database lookup errors fail closed with a sanitized HTTP 500 without leaking internals. Explicit server-side administrative policies and hardware IoT device authentication remain fully decoupled and functional. The automated test suite has expanded to 140 passing tests with zero regressions.
+Milestone 3C.3a establishes the persistent database schema and Alembic migration for the hardware access terminal (IoT device) registry. The newly created `devices` table stores durable device identities (`device_id`), friendly names/locations, lifecycle status (`active`, `suspended`, `revoked`), cryptographic secret verifiers (`secret_hash`), credential versioning (`key_version`), and audit timestamps. Crucially, raw pre-shared keys and HMAC secrets are strictly forbidden from database persistence in plaintext, and no biometric audio, embedding vectors, or Firebase tokens are stored. The migration chain cleanly integrates revision `316dea338f3b` with single-revision downgrade capability preserving speaker and user-mapping tables. The automated test suite has expanded to 141 passing tests with zero regressions.
 
 
 ---
@@ -288,16 +288,42 @@ Milestone 3C.2c.2 completes the enforcement of persistent, database-backed autho
     9. Existing challenge and verification behavior does not regress.
   - Total automated tests expanded to 140 passing tests in 2.74s.
 
+### Milestone 3C.3a: Device Registry Schema and Migration (Completed)
+- **DeviceRecord Model (`app/db/base.py`):**
+  - Implemented `DeviceRecord` entity mapping to `devices` table using SQLAlchemy 2.0 declarative syntax:
+    - `id`: Autoincrement integer primary key.
+    - `device_id`: Unique, indexed, non-null `String(64)` identifying the physical access terminal.
+    - `name`: Nullable `String(128)` describing the device name or physical installation location.
+    - `status`: Lifecycle status (`String(32)`, default `"active"`, non-null) supporting `"active"`, `"suspended"`, and `"revoked"`.
+    - `secret_hash`: `String(255)` storing one-way cryptographic hash / derived secret verifier (e.g. SHA-256 or PBKDF2). Raw pre-shared keys and HMAC secrets are strictly forbidden from database persistence.
+    - `key_version`: Non-null `Integer` (default 1) enabling version tracking for zero-downtime key rotation in future increments.
+    - `created_at` / `updated_at`: Timezone-aware UTC timestamps tracking device lifecycle.
+    - `metadata_json`: Nullable `Text` for auxiliary device configuration (e.g., MAC address, firmware version, building zone).
+    - `@property is_active`: Boolean check evaluating `self.status == "active"`.
+  - Re-exported in `app/db/__init__.py` and `app/core/database.py`.
+  - Sensitive data exclusion: strictly avoids storing plaintext secrets, Firebase tokens, biometric audio, or embedding vectors.
+- **Alembic Migration (`316dea338f3b_create_devices_table.py`):**
+  - Chained cleanly to revision `0b98eaf9dc3e` (`create_user_speaker_mappings_table`).
+  - Implemented `upgrade()` and `downgrade()` managing table creation, unique index on `device_id`, and clean teardown.
+- **Automated Schema & Rollback Tests (`tests/test_database.py`):**
+  - Added `test_devices_schema_migration_and_constraints`:
+    - Verifies migration upgrade to head, table column inspection, and unique index existence (`ix_devices_device_id`).
+    - Validates valid insertion, field persistence, and `is_active` lifecycle transitions (`active` -> `revoked`).
+    - Enforces uniqueness: duplicate `device_id` raises `IntegrityError`.
+    - Validates single-revision rollback (`316dea338f3b -> 0b98eaf9dc3e`) dropping `devices` while preserving `user_speaker_mappings`, `speakers`, and `schema_initializations`.
+    - Verifies re-application of `upgrade head`.
+  - Total automated tests expanded to 141 passing tests in 2.95s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **140/140 tests PASSED in 2.74s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 15 Database + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **141/141 tests PASSED in 2.95s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 16 Database + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema, device schema & rollback) |
 | **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** (mapped, unmapped, mismatch, tamper, admin, fail-closed, pre-inference, device, regression) |
 | **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** (CRUD, scalar queries, 1-to-1 uniqueness, cascade delete) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, active filters, validation, duplicate rejection, rollback) |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **15/15 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema & rollback) |
 | **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
 | **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
 | **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
@@ -312,7 +338,7 @@ Milestone 3C.2c.2 completes the enforcement of persistent, database-backed autho
 ## 4. Known Issues & Remaining Security Risks
 1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3–3C.4).
+   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3b–3C.4).
 2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
 3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
@@ -324,12 +350,12 @@ Milestone 3C.2c.2 completes the enforcement of persistent, database-backed autho
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.3: Device Registry Schema & Persistent Device Authentication**:
-1. Implement `DeviceRecord` schema and Alembic migration for hardware access terminals (storing device ID, hashed credentials, location, and lifecycle status).
-2. Create `DeviceRepository` with caller-controlled transactions.
-3. Replace hardcoded/environment device registry with database-backed authentication.
-4. Add migration, rollback, and repository tests against disposable databases.
-5. Push completed 3C.3 increment to `feature/enterprise-foundation`.
+Proceed to **Milestone 3C.3b: Persistent Device Repository and Database Authentication**:
+1. Implement `DeviceRepository` with caller-controlled transactions and CRUD operations (`create`, `get_by_device_id`, `update_status`, `verify_secret`).
+2. Migrate device authentication in `app/core/device_auth.py` to authenticate against persistent `devices` records.
+3. Add repository and authentication tests against disposable databases.
+4. Validate zero regressions across all existing suites.
+5. Commit and push 3C.3b to `feature/enterprise-foundation`.
 
 
 

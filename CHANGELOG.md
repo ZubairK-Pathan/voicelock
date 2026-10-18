@@ -10,6 +10,20 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.3a: Device Registry Schema and Migration**
+  - Implemented `DeviceRecord` entity in `app/db/base.py` mapping to `devices`:
+    - Columns: `id` (PK), `device_id` (`String(64)`, unique, indexed, non-null), `name` (`String(128)`, nullable), `status` (`String(32)`, default="active", non-null), `secret_hash` (`String(255)`, non-null), `key_version` (`Integer`, default=1, non-null), UTC timestamps (`created_at`, `updated_at`), and `metadata_json` (`Text`, nullable).
+    - Lifecycle helper: `@property is_active` returning `self.status == "active"`.
+    - Key versioning: `key_version` field supporting zero-downtime credential rotation in future milestones.
+    - Sensitive data exclusion: strictly avoids storing plaintext device secrets, HMAC signing keys, Firebase tokens, or biometric audio/embeddings. Only one-way cryptographic hashes / derived verifiers are stored in `secret_hash`.
+    - Re-exported in `app/db/__init__.py` and `app/core/database.py`.
+  - Created Alembic migration `316dea338f3b_create_devices_table.py` chained from `0b98eaf9dc3e` (`create_user_speaker_mappings_table`):
+    - `upgrade()`: Creates `devices` table with columns, server defaults, and unique index `ix_devices_device_id`.
+    - `downgrade()`: Drops index and drops `devices` table cleanly.
+  - Added schema and migration rollback tests in `tests/test_database.py`:
+    - `test_devices_schema_migration_and_constraints`: Verifies schema inspection, column types, unique index existence, ORM CRUD lifecycle transitions, duplicate `device_id` uniqueness enforcement (`IntegrityError`), single-revision rollback to `0b98eaf9dc3e` preserving existing tables, and re-application of `upgrade head`.
+  - Expanded total automated test suite from 140 to 141 passing tests.
+
 - **Milestone 3C.2c.2: Persistent User-to-Speaker Authorization Enforcement**
   - Implemented `UserSpeakerRepository` in `app/repositories/user_speaker_repository.py` using SQLAlchemy 2.0:
     - Encapsulates database operations for `UserSpeakerMapping`: `create()`, `get_by_firebase_uid()`, `get_speaker_id_for_user()`, `get_by_speaker_id()`, `get_or_raise()`, `delete_by_firebase_uid()`, `delete_by_speaker_id()`, `list_mappings()`, and `count()`.
