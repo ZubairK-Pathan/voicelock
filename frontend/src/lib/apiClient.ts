@@ -6,6 +6,8 @@
  * Never exposes tokens in URLs, query strings, or debug logs.
  */
 
+import type { SpeakersApiResponse } from '../types';
+
 export interface ApiClientConfig {
   baseUrl: string;
   getToken?: () => Promise<string | null>;
@@ -141,6 +143,10 @@ export class ApiClient {
 
   public get<T = unknown>(endpoint: string, options?: RequestInit & { requiresAuth?: boolean }) {
     return this.request<T>(endpoint, { ...options, method: 'GET' });
+  }
+
+  public getSpeakers(options?: RequestInit & { requiresAuth?: boolean }) {
+    return this.get<SpeakersApiResponse>('/speakers', options);
   }
 
   public post<T = unknown>(

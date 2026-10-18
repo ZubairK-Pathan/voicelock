@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Increment 2 — Database-Backed Speaker Service (Completed)  
+**Current Milestone:** Increment 3A — React Speakers Page Real API Integration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Database-backed speaker service active, 226 backend automated tests passing in 4.50s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Real database-backed speaker registry connected to React frontend, 226 backend automated tests passing in 5.26s, 15 frontend unit/integration tests passing in 142ms, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 2 implements the Database-Backed Speaker Service (`app/services/speaker_service.py`), retiring reliance on raw file-based `speaker_profiles/profiles.pkl` for all production FastAPI routes (`/speakers`, `/challenge`, `/identify`, `/verify`, `/ws/identify`) while preserving local CLI workflows (`predict.py`, `evaluate.py`, `tune_threshold.py`, `app.py`). `SpeakerService` operates strictly within caller-owned SQLAlchemy sessions (`Session`), preventing concurrency leaks across requests. It deserializes and validates 192-d biometric embeddings via `app.core.embeddings`, safely omitting inactive speakers, missing voiceprints, or corrupted vectors without exposing biometric numbers in logs. Explicit typed exceptions (`SpeakerNotFoundError`, `InactiveSpeakerError`, `MissingSpeakerEmbeddingError`, `EmptySpeakerRegistryError`, `SpeakerServiceDatabaseError`) enforce fail-closed security (returning clean HTTP 404, 403, 503, or 500 status codes). Persistent actor authorization (`UserSpeakerMapping` and `AuthenticatedDevice`) and single-use challenge consumption strictly precede disk spooling and SpeechBrain ECAPA-TDNN inference. The automated backend test suite expanded from 208 to **226 tests passing in 4.50s** (18 dedicated service and API integration tests in `tests/test_database_speaker_service.py`) with zero ML or UI regressions.
+Increment 3A connects the frontend React `SpeakersPage` (`frontend/src/components/pages/SpeakersPage.tsx`) to the live FastAPI `GET /speakers` endpoint, completely retiring hardcoded mock records (`MOCK_SPEAKERS`). The page dynamically retrieves the active speaker registry via `apiClient.getSpeakers()`, attaching the authenticated operator's Firebase ID token via `Authorization: Bearer <ID_TOKEN>`. The UI strictly conforms to the backend response schema (`registered_speakers: string[]`, `count: number`), presenting verified enrolled speaker identities alongside active biometric status and ECAPA-TDNN architecture metadata while omitting fabricated departments, mock sample counts, and fake enrollment timestamps. The implementation introduces robust state machines covering asynchronous data loading, empty database states, search-filtered empty states, and user-friendly error banners for HTTP 401 Unauthorized, HTTP 403 Forbidden (administrative RBAC boundary), and HTTP 500/network failures with retry actions. The frontend test suite expanded from 6 to **15 automated tests passing in 142ms** (`frontend/src/lib/speakersService.test.ts`), verifying token attachment, data loading, error handling, search filtering, and zero-mock invariant compliance with zero backend regressions (226/226 backend tests passing).
 
 
 ---
@@ -479,24 +479,42 @@ Increment 2 implements the Database-Backed Speaker Service (`app/services/speake
   - `WS /ws/identify`: identifies speakers against active database profiles using short-lived session context.
 - **Workflow & Evaluation Preservation:**
   - Preserved standalone CLI and ML workflows (`predict.py`, `evaluate.py`, `tune_threshold.py`, `app.py`) and left pickle files untouched.
+### Increment 3A: React Speakers Page Real API Integration (Completed)
+- **Frontend Real Database Integration (`frontend/src/components/pages/SpeakersPage.tsx`):**
+  - Connected `SpeakersPage` to FastAPI `GET /speakers` endpoint via `apiClient.getSpeakers()`, replacing all mock data entities (`MOCK_SPEAKERS`).
+  - Reused the existing Firebase ID token provider in `App.tsx` and `apiClient.ts` to attach `Authorization: Bearer <ID_TOKEN>` headers.
+  - Strictly adapted UI to the backend response schema (`registered_speakers: string[]`, `count: number`).
+  - Omitted all fabricated fields: removed mock departments, fake enrollment dates, simulated sample counts, and fake clearance tiers.
+  - Removed speaker creation controls, deletion controls, and embedding-editing mock modals.
+  - Implemented comprehensive state machine:
+    - **Loading State:** Centered card with spinning indicator and descriptive database querying copy.
+    - **Empty State:** Distinct informative card displayed when the persistent database contains 0 registered speakers.
+    - **Search Empty State:** Table empty row with clear search action when query filters out all identities.
+    - **Error Handling (401 Unauthorized):** Amber warning banner explaining session expiry with re-authentication retry.
+    - **Error Handling (403 Forbidden):** Rose security banner explaining that administrative role is required to enumerate the speaker registry.
+    - **Error Handling (500 / Network Error):** Sanitized connection error banner with manual retry button.
+    - **Success State:** Searchable table with live database counter, row indexing, active status badge, and ECAPA-TDNN 192-d architecture indicator.
 - **Automated Verification:**
-  - Added `tests/test_database_speaker_service.py` (18 unit and integration tests) using synthetic unit vectors and disposable test databases.
-  - Total automated backend tests expanded from 208 to **226 tests passing in 4.50s**.
+  - Added `frontend/src/lib/speakersService.test.ts` (9 tests) covering token attachment, real API response parsing, empty database handling, 401 expired sessions, 403 forbidden access, 500 database errors, network failures, search filtering, and zero-mock invariant verification.
+  - Frontend test suite expanded from 6 to **15 tests passing in 142ms**.
+  - Frontend production build (`npm run build`) passed cleanly in 98ms.
+  - Frontend linter (`npm run lint`) reported **0 warnings and 0 errors** across 25 files.
+  - Backend automated test suite remains 100% passing (**226/226 tests passing in 5.26s**).
 
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **15/15 tests PASSED in 142ms** (Bearer token attachment, unauthenticated routes, 401/403 safety, real API loading, empty database, search filtering, zero-mock invariant) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 25 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 98ms** |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
 | **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **226/226 tests PASSED in 4.50s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
-| **Frontend Unit Tests** | `npm test` (in `frontend/`) | 0 | **6/6 tests PASSED in 22ms** (Bearer token attachment, unauthenticated routes, error suppression, 401/403 safety, JSON parsing) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 24 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 209ms** |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **226/226 tests PASSED in 5.26s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |

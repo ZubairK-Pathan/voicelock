@@ -2,6 +2,11 @@ export type NavigationTab = 'overview' | 'speakers' | 'verification' | 'devices'
 
 export type EntityStatus = 'active' | 'suspended' | 'revoked';
 
+export interface SpeakersApiResponse {
+  registered_speakers: string[];
+  count: number;
+}
+
 export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface Speaker {

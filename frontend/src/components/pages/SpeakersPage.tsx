@@ -1,35 +1,90 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Users,
-  UserPlus,
-  FileAudio,
-  Key,
-  Info,
+  RefreshCw,
   AlertCircle,
+  Lock,
+  ShieldAlert,
+  Database,
 } from 'lucide-react';
 import { SearchBar } from '../common/SearchBar';
 import { Badge } from '../common/Badge';
-import { Modal } from '../common/Modal';
-import { MOCK_SPEAKERS } from '../../data/mockData';
-import type { Speaker, EntityStatus } from '../../types';
+import { apiClient } from '../../lib/apiClient';
 
 export const SpeakersPage: React.FC = () => {
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | EntityStatus>('all');
-  const [selectedSpeaker, setSelectedSpeaker] = useState<Speaker | null>(null);
-  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
+  const [speakers, setSpeakers] = useState<string[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [statusCode, setStatusCode] = useState<number | null>(null);
+  const [search, setSearch] = useState<string>('');
+
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  const handleRefresh = useCallback(() => {
+    setIsLoading(true);
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadSpeakers() {
+      try {
+        const response = await apiClient.getSpeakers();
+        if (ignore) return;
+        setStatusCode(response.status);
+
+        if (response.ok && response.data) {
+          const speakerList = response.data.registered_speakers || [];
+          setSpeakers(speakerList);
+          setTotalCount(response.data.count ?? speakerList.length);
+          setError(null);
+        } else {
+          if (response.status === 401) {
+            setError(
+              'Your session has expired or is unauthenticated. Please sign in with a valid operator account to access the speaker registry.'
+            );
+          } else if (response.status === 403) {
+            setError(
+              'Administrative privileges are required to view the enrolled speaker registry. Ordinary operators are restricted from enumerating voice identities.'
+            );
+          } else {
+            setError(
+              response.error ||
+                'Unable to load the speaker registry from the database. Please verify backend connectivity.'
+            );
+          }
+          setSpeakers([]);
+          setTotalCount(0);
+        }
+      } catch {
+        if (!ignore) {
+          setError('Network communication failed while querying the speaker registry.');
+          setSpeakers([]);
+          setTotalCount(0);
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadSpeakers();
+
+    return () => {
+      ignore = true;
+    };
+  }, [refreshTrigger]);
 
   const filteredSpeakers = useMemo(() => {
-    return MOCK_SPEAKERS.filter((speaker) => {
-      const matchesSearch =
-        speaker.name.toLowerCase().includes(search.toLowerCase()) ||
-        speaker.speaker_id.toLowerCase().includes(search.toLowerCase()) ||
-        speaker.department.toLowerCase().includes(search.toLowerCase());
-      const matchesStatus =
-        statusFilter === 'all' || speaker.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [search, statusFilter]);
+    if (!search.trim()) return speakers;
+    const query = search.trim().toLowerCase();
+    return speakers.filter((speakerName) =>
+      speakerName.toLowerCase().includes(query)
+    );
+  }, [speakers, search]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -49,333 +104,201 @@ export const SpeakersPage: React.FC = () => {
           <SearchBar
             value={search}
             onChange={setSearch}
-            placeholder="Search by name, ID, or department..."
-            count={filteredSpeakers.length}
+            placeholder="Search enrolled speaker identities..."
+            count={!isLoading && !error ? filteredSpeakers.length : undefined}
           />
-          {/* Status Filter Buttons */}
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {(['all', 'active', 'suspended', 'revoked'] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                className="btn btn-secondary"
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  textTransform: 'capitalize',
-                  borderColor:
-                    statusFilter === status
-                      ? 'var(--color-brand)'
-                      : 'var(--border-subtle)',
-                  background:
-                    statusFilter === status
-                      ? 'rgba(59, 130, 246, 0.12)'
-                      : 'var(--bg-surface)',
-                  color:
-                    statusFilter === status
-                      ? '#FFFFFF'
-                      : 'var(--text-secondary)',
-                }}
-              >
-                {status}
-              </button>
-            ))}
-          </div>
         </div>
 
-        <button
-          onClick={() => setIsEnrollModalOpen(true)}
-          className="btn btn-primary"
-        >
-          <UserPlus size={16} /> Enroll New Speaker
-        </button>
-      </div>
-
-      {/* Speakers Table */}
-      <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
-        <div className="table-container">
-          <table className="enterprise-table">
-            <thead>
-              <tr>
-                <th>Speaker Identity</th>
-                <th>Department</th>
-                <th>Status</th>
-                <th>Biometric Samples</th>
-                <th>Clearance Tier</th>
-                <th>User UID Binding</th>
-                <th>Last Verified</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredSpeakers.length > 0 ? (
-                filteredSpeakers.map((speaker) => (
-                  <tr key={speaker.id}>
-                    <td>
-                      <div className="font-semibold text-primary">{speaker.name}</div>
-                      <div className="font-mono text-xs text-muted">id: {speaker.speaker_id}</div>
-                    </td>
-                    <td className="text-secondary">{speaker.department}</td>
-                    <td>
-                      <Badge value={speaker.status} />
-                    </td>
-                    <td>
-                      <div className="font-mono text-xs text-primary font-medium">
-                        {speaker.sample_count} audio files
-                      </div>
-                      <div className="text-xs text-muted font-mono">
-                        {speaker.embedding_dim}-dim vector
-                      </div>
-                    </td>
-                    <td>
-                      <span className="text-xs font-medium text-secondary">
-                        {speaker.security_clearance}
-                      </span>
-                    </td>
-                    <td>
-                      {speaker.firebase_uid ? (
-                        <div className="font-mono text-xs text-secondary" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Key size={11} color="#60A5FA" /> {speaker.firebase_uid}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted italic">Unmapped</span>
-                      )}
-                    </td>
-                    <td className="font-mono text-xs text-muted">
-                      {speaker.last_verified_at}
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => setSelectedSpeaker(speaker)}
-                        className="btn btn-secondary"
-                        style={{ padding: '4px 10px', fontSize: '12px' }}
-                      >
-                        Inspect Voiceprint
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '48px 20px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <Users size={32} color="var(--text-muted)" />
-                      <div className="text-sm font-semibold text-primary">No speaker identities found</div>
-                      <p className="text-xs text-muted">
-                        No enrolled speakers matched your query "{search}". Try searching by another keyword.
-                      </p>
-                      <button
-                        onClick={() => {
-                          setSearch('');
-                          setStatusFilter('all');
-                        }}
-                        className="btn btn-secondary"
-                        style={{ marginTop: '8px', fontSize: '12px' }}
-                      >
-                        Clear Filters
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Speaker Details Modal */}
-      {selectedSpeaker && (
-        <Modal
-          isOpen={true}
-          onClose={() => setSelectedSpeaker(null)}
-          title={`Speaker Voiceprint: ${selectedSpeaker.name}`}
-          subtitle={`Speaker ID: ${selectedSpeaker.speaker_id} | Enrolled: ${selectedSpeaker.created_at}`}
-          footer={
-            <button
-              onClick={() => setSelectedSpeaker(null)}
-              className="btn btn-secondary"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {!isLoading && !error && (
+            <span
+              className="badge badge-active"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
             >
-              Close
-            </button>
-          }
+              <Database size={13} color="var(--color-emerald)" />
+              Database Registry: {totalCount} Enrolled
+            </span>
+          )}
+
+          <button
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="btn btn-secondary"
+            style={{ padding: '6px 14px', fontSize: '12px' }}
+            title="Refresh speaker registry from database"
+            aria-label="Refresh speaker registry"
+          >
+            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Loading State */}
+      {isLoading && (
+        <div
+          className="card"
+          style={{ padding: '48px 20px', textAlign: 'center' }}
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Acoustic Model</span>
-                <div className="font-mono text-sm font-semibold text-primary" style={{ marginTop: '2px' }}>
-                  ECAPA-TDNN (VoxCeleb)
-                </div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Embedding Dimensions</span>
-                <div className="font-mono text-sm font-semibold text-primary" style={{ marginTop: '2px' }}>
-                  192 dimensions
-                </div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Enrollment Utterances</span>
-                <div className="font-mono text-sm font-semibold text-primary" style={{ marginTop: '2px' }}>
-                  {selectedSpeaker.sample_count} Clean Utterances
-                </div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Lifecycle Status</span>
-                <div style={{ marginTop: '4px' }}>
-                  <Badge value={selectedSpeaker.status} />
-                </div>
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+            <RefreshCw size={32} className="animate-spin" color="var(--color-brand)" />
+            <div className="text-sm font-semibold text-primary">
+              Loading speaker registry from database...
             </div>
-
-            {/* Simulated Voiceprint Vector Visualization */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span className="text-xs font-semibold text-secondary">
-                  Voiceprint Embedding Vector (192-d Sample Preview)
-                </span>
-                <span className="text-xs font-mono text-muted">L2 Normalized</span>
-              </div>
-              <div
-                style={{
-                  background: 'rgba(8, 12, 20, 0.8)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  color: '#60A5FA',
-                  maxHeight: '110px',
-                  overflowY: 'auto',
-                  lineHeight: '1.6',
-                }}
-              >
-                [0.0842, -0.1942, 0.4419, 0.0125, -0.2819, 0.1502, 0.0891, -0.0418, 0.3291, -0.1194, 0.0541, 0.2291, -0.1802, 0.0921, 0.1189, -0.0712, 0.2891, 0.0041, -0.1542, 0.3812, 0.0912, -0.0123, 0.1824, -0.0941, 0.2190, ... +167 dimensions]
-              </div>
-            </div>
-
-            <div style={{ padding: '10px 14px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(59, 130, 246, 0.2)', display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <Info size={16} color="#60A5FA" />
-              <span className="text-xs text-secondary">
-                This voice identity is authorized to verify at physical access terminals configured for {selectedSpeaker.security_clearance}.
-              </span>
-            </div>
+            <p className="text-xs text-muted" style={{ maxWidth: '420px' }}>
+              Querying persistent database records and verifying active ECAPA-TDNN voiceprint profiles.
+            </p>
           </div>
-        </Modal>
+        </div>
       )}
 
-      {/* Enrollment Placeholder Modal */}
-      {isEnrollModalOpen && (
-        <Modal
-          isOpen={true}
-          onClose={() => setIsEnrollModalOpen(false)}
-          title="Enroll New Speaker Identity (Prototype Interface)"
-          subtitle="Biometric Enrollment Placeholder — VoiceLock Enterprise"
-          footer={
-            <>
-              <button
-                onClick={() => setIsEnrollModalOpen(false)}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  alert("Prototype Notice: Real biometric enrollment requires multi-utterance 16kHz audio capture and will be integrated with the FastAPI backend in Milestone 4B/4C.");
-                  setIsEnrollModalOpen(false);
-                }}
-                className="btn btn-primary"
-              >
-                Confirm Mock Enrollment
-              </button>
-            </>
-          }
+      {/* Recoverable Error States (401, 403, 500 / Network) */}
+      {!isLoading && error && (
+        <div
+          className="card"
+          style={{
+            padding: '28px 24px',
+            borderLeft: `4px solid ${
+              statusCode === 401
+                ? 'var(--color-amber)'
+                : statusCode === 403
+                ? 'var(--color-rose)'
+                : 'var(--color-rose)'
+            }`,
+          }}
+          role="alert"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div
-              style={{
-                padding: '12px 16px',
-                background: 'rgba(245, 158, 11, 0.1)',
-                border: '1px solid rgba(245, 158, 11, 0.3)',
-                borderRadius: 'var(--radius-sm)',
-                display: 'flex',
-                gap: '10px',
-                alignItems: 'flex-start',
-              }}
-            >
-              <AlertCircle size={18} color="#F59E0B" style={{ marginTop: '2px' }} />
-              <div>
-                <div className="text-xs font-semibold" style={{ color: '#FBBF24' }}>
-                  Decoupled Prototype Mode
-                </div>
-                <div className="text-xs text-secondary" style={{ marginTop: '2px' }}>
-                  This form demonstrates the speaker enrollment workflow. No changes will be written to the database until the API endpoint is bound.
-                </div>
-              </div>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+            {statusCode === 401 ? (
+              <ShieldAlert size={28} color="var(--color-amber)" style={{ flexShrink: 0 }} />
+            ) : statusCode === 403 ? (
+              <Lock size={28} color="var(--color-rose)" style={{ flexShrink: 0 }} />
+            ) : (
+              <AlertCircle size={28} color="var(--color-rose)" style={{ flexShrink: 0 }} />
+            )}
 
-            <div>
-              <label className="text-xs font-semibold text-secondary" style={{ display: 'block', marginBottom: '6px' }}>
-                Full Legal Name
-              </label>
-              <input
-                type="text"
-                className="search-input"
-                style={{ width: '100%' }}
-                placeholder="e.g. Zainab Ali"
-                defaultValue=""
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-secondary" style={{ display: 'block', marginBottom: '6px' }}>
-                Speaker Identifier (Alphanumeric)
-              </label>
-              <input
-                type="text"
-                className="search-input font-mono"
-                style={{ width: '100%' }}
-                placeholder="e.g. Zainab"
-                defaultValue=""
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-secondary" style={{ display: 'block', marginBottom: '6px' }}>
-                Department / Access Group
-              </label>
-              <input
-                type="text"
-                className="search-input"
-                style={{ width: '100%' }}
-                placeholder="e.g. Embedded Security Systems"
-                defaultValue=""
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-secondary" style={{ display: 'block', marginBottom: '6px' }}>
-                Security Clearance Level
-              </label>
-              <select
-                className="search-input"
-                style={{ width: '100%', cursor: 'pointer' }}
-                defaultValue="Tier 1 - Standard"
+            <div style={{ flex: 1 }}>
+              <div
+                className="text-sm font-semibold"
+                style={{
+                  color:
+                    statusCode === 401
+                      ? 'var(--color-amber)'
+                      : 'var(--color-rose)',
+                }}
               >
-                <option value="Tier 1 - Standard">Tier 1 - Standard Access</option>
-                <option value="Tier 2 - Restricted">Tier 2 - Restricted Datacenter</option>
-                <option value="Tier 3 - Critical">Tier 3 - Critical Core Operations</option>
-              </select>
-            </div>
+                {statusCode === 401
+                  ? 'Authentication Required (HTTP 401)'
+                  : statusCode === 403
+                  ? 'Access Restricted: Administrative Role Required (HTTP 403)'
+                  : 'Registry Communication Error'}
+              </div>
 
-            <div style={{ padding: '16px', background: 'rgba(14, 20, 34, 0.5)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)', textAlign: 'center' }}>
-              <FileAudio size={24} color="#60A5FA" style={{ margin: '0 auto 8px' }} />
-              <div className="text-xs font-semibold text-primary">Required Audio Utterances (3 to 5 Files)</div>
-              <p className="text-xs text-muted" style={{ marginTop: '4px' }}>
-                16,000 Hz, 16-bit PCM Mono audio format normalized with peak [-1, 1]
+              <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: '1.6' }}>
+                {error}
               </p>
+
+              <button
+                onClick={handleRefresh}
+                className="btn btn-secondary"
+                style={{ marginTop: '14px', fontSize: '12px' }}
+              >
+                <RefreshCw size={13} /> Retry Connection
+              </button>
             </div>
           </div>
-        </Modal>
+        </div>
+      )}
+
+      {/* Empty Database Registry State */}
+      {!isLoading && !error && speakers.length === 0 && (
+        <div className="card" style={{ padding: '48px 20px', textAlign: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+            <Users size={36} color="var(--text-muted)" />
+            <div className="text-sm font-semibold text-primary">
+              No Enrolled Speakers in Database
+            </div>
+            <p className="text-xs text-muted" style={{ maxWidth: '440px' }}>
+              The persistent speaker registry currently contains no active voice profiles.
+              Run the safe speaker database seeder to import approved participant voiceprints.
+            </p>
+            <button
+              onClick={handleRefresh}
+              className="btn btn-secondary"
+              style={{ marginTop: '10px', fontSize: '12px' }}
+            >
+              <RefreshCw size={13} /> Check Database Again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Speakers Table */}
+      {!isLoading && !error && speakers.length > 0 && (
+        <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
+          <div className="table-container">
+            <table className="enterprise-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '60px' }}>#</th>
+                  <th>Speaker Identity</th>
+                  <th>Biometric Registry Status</th>
+                  <th>Acoustic Architecture</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSpeakers.length > 0 ? (
+                  filteredSpeakers.map((speakerName, idx) => (
+                    <tr key={speakerName}>
+                      <td className="font-mono text-xs text-muted">{idx + 1}</td>
+                      <td>
+                        <div className="font-semibold text-primary">{speakerName}</div>
+                        <div className="font-mono text-xs text-muted">
+                          id: {speakerName}
+                        </div>
+                      </td>
+                      <td>
+                        <Badge value="active" label="Enrolled & Active" />
+                      </td>
+                      <td>
+                        <div className="font-mono text-xs text-secondary">
+                          SpeechBrain ECAPA-TDNN (192-d)
+                        </div>
+                        <div className="text-xs text-muted">
+                          L2-normalized unit vector in persistent database
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '48px 20px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                        <Users size={32} color="var(--text-muted)" />
+                        <div className="text-sm font-semibold text-primary">
+                          No matching speaker identities
+                        </div>
+                        <p className="text-xs text-muted">
+                          No enrolled speaker matched "{search}".
+                        </p>
+                        <button
+                          onClick={() => setSearch('')}
+                          className="btn btn-secondary"
+                          style={{ marginTop: '8px', fontSize: '12px' }}
+                        >
+                          Clear Search
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

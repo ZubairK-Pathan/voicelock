@@ -10,6 +10,24 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3A: React Speakers Page Real API Integration**
+  - Connected `frontend/src/components/pages/SpeakersPage.tsx` directly to the live FastAPI `GET /speakers` endpoint via `apiClient.getSpeakers()`.
+  - Reused the existing Firebase ID token provider in `App.tsx` and `apiClient.ts` to attach `Authorization: Bearer <ID_TOKEN>` headers.
+  - Replaced hardcoded `MOCK_SPEAKERS` data with real database-backed speaker records.
+  - Strictly conformed UI to the backend response schema (`registered_speakers: string[]`, `count: number`), displaying only verified returned fields.
+  - Omitted fabricated fields: eliminated mock departments, fake sample counts, artificial enrollment timestamps, and simulated clearance levels.
+  - Removed speaker creation controls, deletion controls, and embedding-editing mock modals.
+  - Implemented comprehensive state machine:
+    - **Loading State:** Centered card with spinning indicator and informative database querying copy.
+    - **Empty State:** Clean informative card displayed when the persistent database contains 0 registered speakers.
+    - **Search Empty State:** Table empty row with clear search action when query filters out all identities.
+    - **Error Handling (401 Unauthorized):** Amber warning banner explaining session expiry with re-authentication retry.
+    - **Error Handling (403 Forbidden):** Rose security banner explaining that administrative role is required to enumerate the speaker registry.
+    - **Error Handling (500 / Network Error):** Sanitized connection error banner with manual retry button.
+    - **Success State:** Searchable table with live database counter, row indexing, active status badge, and ECAPA-TDNN 192-d architecture indicator.
+  - Added dedicated unit and integration test suite `frontend/src/lib/speakersService.test.ts` (9 tests) covering token attachment, response parsing, empty registry, 401/403/500/network error states, search filtering, and zero-mock invariant compliance.
+  - Total frontend automated tests expanded from 6 to **15 tests passing in 142ms**.
+  - Verified zero backend regressions with **226/226 backend tests passing**.
 - **Increment 2: Database-Backed Speaker Service**
   - Implemented database-backed `SpeakerService` in `app/services/speaker_service.py` operating strictly within caller-provided SQLAlchemy sessions (`Session`).
   - Added methods `get_registered_speakers()`, `get_speaker_record()`, `is_speaker_active()`, `get_speaker_embedding()`, `get_active_profiles()`, `identify_speaker()`, and `verify_speaker()`.
