@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { StatCard } from '../common/StatCard';
 import { apiClient } from '../../lib/apiClient';
-import type { NavigationTab } from '../../types';
+import type { NavigationTab, VerificationMetricsResponse } from '../../types';
 
 interface OverviewPageProps {
   onNavigate: (tab: NavigationTab) => void;
@@ -25,6 +25,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
   const [speakersCount, setSpeakersCount] = useState<number | null>(null);
   const [devicesCount, setDevicesCount] = useState<number | null>(null);
   const [activeDevicesCount, setActiveDevicesCount] = useState<number | null>(null);
+  const [verificationMetrics, setVerificationMetrics] = useState<VerificationMetricsResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [statusCode, setStatusCode] = useState<number | null>(null);
@@ -44,15 +45,20 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       setStatusCode(null);
 
       try {
-        const [speakersRes, devicesRes] = await Promise.all([
+        const [speakersRes, devicesRes, metricsRes] = await Promise.all([
           apiClient.getSpeakers(),
           apiClient.getDevices(),
+          apiClient.getVerificationMetrics(),
         ]);
 
         if (ignore) return;
 
-        // Check for 401 Unauthorized
-        if (speakersRes.status === 401 || devicesRes.status === 401) {
+        // Check for 401 Unauthorized across any endpoint
+        if (
+          speakersRes.status === 401 ||
+          devicesRes.status === 401 ||
+          metricsRes.status === 401
+        ) {
           setStatusCode(401);
           setError(
             'Your operator session has expired or is unauthenticated. Please re-authenticate to view live system metrics.'
@@ -60,18 +66,24 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           setSpeakersCount(null);
           setDevicesCount(null);
           setActiveDevicesCount(null);
+          setVerificationMetrics(null);
           return;
         }
 
-        // Check for 403 Forbidden
-        if (speakersRes.status === 403 || devicesRes.status === 403) {
+        // Check for 403 Forbidden across any endpoint
+        if (
+          speakersRes.status === 403 ||
+          devicesRes.status === 403 ||
+          metricsRes.status === 403
+        ) {
           setStatusCode(403);
           setError(
-            'Administrative privileges are required to retrieve the enrolled speaker and hardware terminal registries. Non-administrative operators are restricted.'
+            'Administrative privileges are required to retrieve system telemetry and registries. Non-administrative operators are restricted.'
           );
           setSpeakersCount(null);
           setDevicesCount(null);
           setActiveDevicesCount(null);
+          setVerificationMetrics(null);
           return;
         }
 
@@ -90,13 +102,25 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           setActiveDevicesCount(null);
         }
 
-        if (!speakersRes.ok && !devicesRes.ok) {
-          setStatusCode(speakersRes.status || devicesRes.status);
+        if (metricsRes.ok && metricsRes.data) {
+          setVerificationMetrics(metricsRes.data);
+        } else {
+          setVerificationMetrics(null);
+        }
+
+        if (!speakersRes.ok && !devicesRes.ok && !metricsRes.ok) {
+          setStatusCode(speakersRes.status || devicesRes.status || metricsRes.status);
           setError(
             speakersRes.error ||
               devicesRes.error ||
+              metricsRes.error ||
               'Failed to retrieve system metrics from the database backend.'
           );
+        } else if (!metricsRes.ok && (speakersRes.ok || devicesRes.ok)) {
+          setError(
+            metricsRes.error || 'Verification telemetry endpoint returned an error.'
+          );
+          setStatusCode(metricsRes.status);
         }
       } catch {
         if (!ignore) {
@@ -105,6 +129,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           setSpeakersCount(null);
           setDevicesCount(null);
           setActiveDevicesCount(null);
+          setVerificationMetrics(null);
         }
       } finally {
         if (!ignore) {
@@ -136,6 +161,27 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
     if (devicesCount === null) return 'Registry unavailable';
     if (devicesCount === 0) return '0 terminals registered (Awaiting provisioning)';
     return `${activeDevicesCount ?? 0} online of ${devicesCount} registered units`;
+  };
+
+  const getSuccessRateValue = () => {
+    if (isLoading) return '—';
+    if (verificationMetrics !== null) {
+      return `${verificationMetrics.success_rate.toFixed(1)}%`;
+    }
+    return '—';
+  };
+
+  const getSuccessRateSubtitle = () => {
+    if (isLoading) return 'Querying verification telemetry...';
+    if (statusCode === 401) return 'Session unauthenticated';
+    if (statusCode === 403) return 'Admin authorization required';
+    if (verificationMetrics === null) return 'Telemetry unavailable';
+    if (verificationMetrics.total === 0) return '0 attempts recorded (Journal empty)';
+    const evaluated =
+      verificationMetrics.verified +
+      verificationMetrics.rejected +
+      verificationMetrics.challenge_failed;
+    return `${verificationMetrics.verified} verified of ${evaluated} evaluated attempts`;
   };
 
   return (
@@ -281,11 +327,19 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
         />
         <StatCard
           title="Verification Success Rate"
-          value="—"
-          subtitle="Audit log persistence not initialized"
-          icon={<CheckCircle2 size={20} color="#64748B" />}
-          iconBgColor="rgba(100, 116, 139, 0.15)"
-          trend={{ value: 'Telemetry Offline', isPositive: false }}
+          value={getSuccessRateValue()}
+          subtitle={getSuccessRateSubtitle()}
+          icon={
+            <CheckCircle2
+              size={20}
+              color={verificationMetrics !== null ? '#10B981' : '#64748B'}
+            />
+          }
+          iconBgColor={
+            verificationMetrics !== null
+              ? 'rgba(16, 185, 129, 0.15)'
+              : 'rgba(100, 116, 139, 0.15)'
+          }
         />
         <StatCard
           title="Security Incidents"
@@ -295,6 +349,170 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           iconBgColor="rgba(100, 116, 139, 0.15)"
           trend={{ value: 'Telemetry Offline', isPositive: false }}
         />
+      </div>
+
+      {/* Verification Telemetry Breakdown */}
+      <div className="card">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '16px',
+            flexWrap: 'wrap',
+            gap: '10px',
+          }}
+        >
+          <div>
+            <h3 className="text-base font-semibold text-primary">Biometric Verification Telemetry</h3>
+            <p className="text-xs text-secondary" style={{ marginTop: '2px' }}>
+              Persistent outcome aggregates from live verification events (ECAPA-TDNN & Vosk Liveness)
+            </p>
+          </div>
+          <span
+            className={`badge ${
+              isLoading
+                ? 'badge-suspended'
+                : verificationMetrics && verificationMetrics.total > 0
+                ? 'badge-active'
+                : 'badge-suspended'
+            } font-mono`}
+          >
+            {isLoading
+              ? 'Querying...'
+              : verificationMetrics
+              ? `${verificationMetrics.total} Total Attempts`
+              : 'Telemetry Offline'}
+          </span>
+        </div>
+
+        {/* 4 Outcome Stat Chips */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: '12px',
+          }}
+        >
+          {/* Verified */}
+          <div
+            style={{
+              padding: '14px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(16, 185, 129, 0.08)',
+              border: '1px solid rgba(16, 185, 129, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: '#34D399' }}>
+              Verified (Access Granted)
+            </div>
+            <div className="font-mono text-xl font-bold" style={{ color: '#10B981' }}>
+              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.verified : '—'}
+            </div>
+            <div className="text-xs text-secondary">
+              Biometric match &ge; threshold (0.25)
+            </div>
+          </div>
+
+          {/* Biometric Rejected */}
+          <div
+            style={{
+              padding: '14px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: '#F87171' }}>
+              Biometric Rejected
+            </div>
+            <div className="font-mono text-xl font-bold" style={{ color: '#EF4444' }}>
+              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.rejected : '—'}
+            </div>
+            <div className="text-xs text-secondary">
+              Similarity below threshold (&lt; 0.25)
+            </div>
+          </div>
+
+          {/* Challenge Failed */}
+          <div
+            style={{
+              padding: '14px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(245, 158, 11, 0.08)',
+              border: '1px solid rgba(245, 158, 11, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: '#FBBF24' }}>
+              Challenge Failed (Spoof / STT)
+            </div>
+            <div className="font-mono text-xl font-bold" style={{ color: '#F59E0B' }}>
+              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.challenge_failed : '—'}
+            </div>
+            <div className="text-xs text-secondary">
+              Liveness challenge digits unverified
+            </div>
+          </div>
+
+          {/* Processing Error */}
+          <div
+            style={{
+              padding: '14px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(100, 116, 139, 0.08)',
+              border: '1px solid rgba(100, 116, 139, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
+              Processing Errors
+            </div>
+            <div className="font-mono text-xl font-bold" style={{ color: '#CBD5E1' }}>
+              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.error : '—'}
+            </div>
+            <div className="text-xs text-secondary">
+              Excluded from success-rate denominator
+            </div>
+          </div>
+        </div>
+
+        {/* Footer info note */}
+        <div
+          style={{
+            marginTop: '14px',
+            paddingTop: '12px',
+            borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '8px',
+          }}
+        >
+          <div className="text-xs text-muted" style={{ lineHeight: '1.4' }}>
+            Success Rate Formula:{' '}
+            <span className="font-mono text-secondary">
+              verified / (verified + rejected + challenge_failed) &times; 100
+            </span>
+            . Processing errors represent audio decode or server faults and are excluded.
+          </div>
+          {verificationMetrics && (
+            <div className="text-xs font-mono text-secondary">
+              Computed Rate: {verificationMetrics.success_rate.toFixed(2)}%
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Middle Split: Biometric Calibration & Security Alerts */}

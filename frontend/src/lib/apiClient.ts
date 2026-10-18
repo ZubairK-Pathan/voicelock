@@ -6,7 +6,11 @@
  * Never exposes tokens in URLs, query strings, or debug logs.
  */
 
-import type { SpeakersApiResponse, DevicesApiResponse } from '../types';
+import type {
+  SpeakersApiResponse,
+  DevicesApiResponse,
+  VerificationMetricsResponse,
+} from '../types';
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -151,6 +155,27 @@ export class ApiClient {
 
   public getDevices(options?: RequestInit & { requiresAuth?: boolean }) {
     return this.get<DevicesApiResponse>('/devices', options);
+  }
+
+  public getVerificationMetrics(
+    params?: {
+      start_time?: string;
+      end_time?: string;
+      verification_flow?: string;
+    },
+    options?: RequestInit & { requiresAuth?: boolean }
+  ) {
+    const query = new URLSearchParams();
+    if (params?.start_time) query.set('start_time', params.start_time);
+    if (params?.end_time) query.set('end_time', params.end_time);
+    if (params?.verification_flow) query.set('verification_flow', params.verification_flow);
+
+    const queryString = query.toString();
+    const endpoint = queryString
+      ? `/metrics/verification?${queryString}`
+      : '/metrics/verification';
+
+    return this.get<VerificationMetricsResponse>(endpoint, options);
   }
 
   public post<T = unknown>(

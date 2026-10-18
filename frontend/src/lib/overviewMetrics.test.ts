@@ -19,7 +19,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ApiClient } from './apiClient.ts';
-import type { SpeakersApiResponse, DevicesApiResponse } from '../types/index.ts';
+import type {
+  SpeakersApiResponse,
+  DevicesApiResponse,
+  VerificationMetricsResponse,
+} from '../types/index.ts';
 import {
   MOCK_METRICS,
   MOCK_VERIFICATION_RECORDS,
@@ -401,3 +405,324 @@ describe('Increment 3B: Overview Dashboard Backend Metrics Integration Suite', (
     );
   });
 });
+
+describe('Increment 3C.5: Overview Dashboard Verification Metrics Integration Suite', () => {
+  const mockToken = 'firebase_id_token_admin_test_12345';
+
+  test('loads real verification metrics with Bearer authentication', async () => {
+    let capturedUrl: string | null = null;
+    let capturedAuthHeader: string | null = null;
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => mockToken,
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      capturedUrl = String(input);
+      const headers = new Headers(init?.headers);
+      capturedAuthHeader = headers.get('Authorization');
+
+      const payload: VerificationMetricsResponse = {
+        total: 14,
+        verified: 5,
+        rejected: 3,
+        challenge_failed: 2,
+        error: 4,
+        success_rate: 50.0,
+        start_time: null,
+        end_time: null,
+        verification_flow: null,
+      };
+
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+
+      assert.strictEqual(res.ok, true);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(capturedUrl, 'http://localhost:8000/metrics/verification');
+      assert.strictEqual(capturedAuthHeader, `Bearer ${mockToken}`);
+
+      assert.strictEqual(res.data?.total, 14);
+      assert.strictEqual(res.data?.verified, 5);
+      assert.strictEqual(res.data?.rejected, 3);
+      assert.strictEqual(res.data?.challenge_failed, 2);
+      assert.strictEqual(res.data?.error, 4);
+      assert.strictEqual(res.data?.success_rate, 50.0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('supports bounded time-window and flow query parameters in apiClient.getVerificationMetrics', async () => {
+    let capturedUrl: string | null = null;
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => mockToken,
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input) => {
+      capturedUrl = String(input);
+      const payload: VerificationMetricsResponse = {
+        total: 2,
+        verified: 1,
+        rejected: 1,
+        challenge_failed: 0,
+        error: 0,
+        success_rate: 50.0,
+        start_time: '2026-10-19T10:00:00Z',
+        end_time: '2026-10-19T12:00:00Z',
+        verification_flow: 'device',
+      };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics({
+        start_time: '2026-10-19T10:00:00Z',
+        end_time: '2026-10-19T12:00:00Z',
+        verification_flow: 'device',
+      });
+
+      assert.strictEqual(res.ok, true);
+      assert.ok(capturedUrl?.includes('start_time=2026-10-19T10%3A00%3A00Z'));
+      assert.ok(capturedUrl?.includes('end_time=2026-10-19T12%3A00%3A00Z'));
+      assert.ok(capturedUrl?.includes('verification_flow=device'));
+      assert.strictEqual(res.data?.verification_flow, 'device');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('treats genuine zero-valued metrics API response as valid non-null data', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => mockToken,
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      const payload: VerificationMetricsResponse = {
+        total: 0,
+        verified: 0,
+        rejected: 0,
+        challenge_failed: 0,
+        error: 0,
+        success_rate: 0.0,
+        start_time: null,
+        end_time: null,
+        verification_flow: null,
+      };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, true);
+      assert.strictEqual(res.status, 200);
+      assert.notStrictEqual(res.data, null);
+      assert.strictEqual(res.data?.total, 0);
+      assert.strictEqual(res.data?.verified, 0);
+      assert.strictEqual(res.data?.rejected, 0);
+      assert.strictEqual(res.data?.challenge_failed, 0);
+      assert.strictEqual(res.data?.error, 0);
+      assert.strictEqual(res.data?.success_rate, 0.0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('handles HTTP 401 Unauthorized safely and does not fabricate zero metrics', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => 'expired_token',
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'Signature has expired' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 401);
+      assert.strictEqual(res.data, null);
+      assert.ok(res.error?.includes('Unauthorized'));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('handles HTTP 403 Forbidden safely when non-admin requests metrics', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => 'user_token',
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'Admin role required' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 403);
+      assert.strictEqual(res.data, null);
+      assert.ok(res.error?.includes('Forbidden'));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('handles HTTP 500 database failure and network drop gracefully without zero-fallbacks', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => mockToken,
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'Database failure while retrieving verification metrics.' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.data, null);
+      assert.strictEqual(res.error, 'Database failure while retrieving verification metrics.');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Test network drop
+    globalThis.fetch = async () => {
+      throw new TypeError('Failed to fetch');
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 0);
+      assert.strictEqual(res.data, null);
+      assert.strictEqual(res.error, 'Failed to fetch');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('data minimization: verification metrics payload contains only aggregate fields', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => mockToken,
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      const payload = {
+        total: 10,
+        verified: 8,
+        rejected: 1,
+        challenge_failed: 1,
+        error: 0,
+        success_rate: 80.0,
+        start_time: null,
+        end_time: null,
+        verification_flow: null,
+      };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    try {
+      const res = await client.getVerificationMetrics();
+      assert.strictEqual(res.ok, true);
+      const metricsObj = res.data as unknown as Record<string, unknown>;
+
+      // Prohibited sensitive / individual fields must not exist
+      assert.strictEqual('user_id' in metricsObj, false);
+      assert.strictEqual('speaker_id' in metricsObj, false);
+      assert.strictEqual('device_id' in metricsObj, false);
+      assert.strictEqual('request_id' in metricsObj, false);
+      assert.strictEqual('event_id' in metricsObj, false);
+      assert.strictEqual('audio' in metricsObj, false);
+      assert.strictEqual('embedding' in metricsObj, false);
+      assert.strictEqual('similarity_score' in metricsObj, false);
+      assert.strictEqual('secret' in metricsObj, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('OverviewPage source integration: connects to real verification metrics and avoids mock metrics', () => {
+    const overviewPath = path.resolve(__dirname, '../components/pages/OverviewPage.tsx');
+    assert.strictEqual(fs.existsSync(overviewPath), true);
+
+    const source = fs.readFileSync(overviewPath, 'utf-8');
+
+    // Asserts that apiClient.getVerificationMetrics() is queried
+    assert.ok(
+      source.includes('apiClient.getVerificationMetrics()'),
+      'OverviewPage must query apiClient.getVerificationMetrics()'
+    );
+
+    // Asserts that the 4 outcome categories are rendered
+    assert.ok(
+      source.includes('Verified (Access Granted)'),
+      'OverviewPage must render verified outcome chip'
+    );
+    assert.ok(
+      source.includes('Biometric Rejected'),
+      'OverviewPage must render biometric rejected outcome chip'
+    );
+    assert.ok(
+      source.includes('Challenge Failed (Spoof / STT)'),
+      'OverviewPage must render challenge failed outcome chip'
+    );
+    assert.ok(
+      source.includes('Processing Errors'),
+      'OverviewPage must render processing error outcome chip'
+    );
+
+    // Asserts that success rate formula is explicitly documented
+    assert.ok(
+      source.includes('verified / (verified + rejected + challenge_failed)'),
+      'OverviewPage must document success rate denominator excluding errors'
+    );
+
+    // Asserts that retry mechanism is present
+    assert.ok(
+      source.includes('handleRefresh') && source.includes('Retry Query'),
+      'OverviewPage must provide a retry action on failure'
+    );
+  });
+});
+

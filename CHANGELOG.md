@@ -10,6 +10,17 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3C.5: Connect React Overview to Real Verification Metrics**
+  - Extended `frontend/src/lib/apiClient.ts` with typed method `getVerificationMetrics(params?, options?)` calling `GET /metrics/verification` with Firebase Bearer token authentication.
+  - Added `VerificationMetricsResponse` TypeScript interface in `frontend/src/types/index.ts` exactly mirroring the backend schema (`total`, `verified`, `rejected`, `challenge_failed`, `error`, `success_rate`, `start_time`, `end_time`, `verification_flow`).
+  - Integrated verification telemetry into `frontend/src/components/pages/OverviewPage.tsx`:
+    - Updated Primary Telemetry Grid: "Verification Success Rate" displays real backend-calculated success percentage and evaluated attempt counts, rendering `—` during loading/error and treating genuine zero responses as valid data (`0.0%`).
+    - Added "Biometric Verification Telemetry" breakdown card displaying real-time persistent counts for Verified (granted), Biometric Rejected, Challenge Failed (spoof/STT), and Processing Errors.
+    - Explicitly documented the success rate denominator: `verified / (verified + rejected + challenge_failed) * 100` with errors excluded.
+    - Preserved zero-mock invariants: zero usage or import of mock metrics or fabricated trends.
+    - Preserved existing loading, error banner, and retry behaviors across 401, 403, 500, and network drop scenarios.
+  - Added 8 automated unit tests in `frontend/src/lib/overviewMetrics.test.ts` verifying real metric loading, parameter handling, zero-valued handling, 401/403 safety, 500/network handling, data minimization, and source integration invariants.
+  - Total frontend automated test suite expanded from 23 to **31 tests passing in 157ms** across 4 suites, with 0 lint warnings and clean build.
 - **Increment 3C.4: Admin Verification Metrics API**
   - Implemented `app/api/routes_metrics.py` exposing administrative telemetry endpoints `GET /metrics/verification` and `GET /metrics`.
   - Exposes aggregate verification metrics strictly derived from `VerificationEventRepository.count_by_outcome()` adhering to caller-controlled transaction conventions.

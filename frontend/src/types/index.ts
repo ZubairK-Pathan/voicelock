@@ -20,6 +20,18 @@ export interface DevicesApiResponse {
   active_count: number;
 }
 
+export interface VerificationMetricsResponse {
+  total: number;
+  verified: number;
+  rejected: number;
+  challenge_failed: number;
+  error: number;
+  success_rate: number;
+  start_time: string | null;
+  end_time: string | null;
+  verification_flow: string | null;
+}
+
 export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface Speaker {
