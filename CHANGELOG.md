@@ -10,6 +10,21 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 4A: React Frontend Foundation and Dashboard Prototype**
+  - Scaffolded modern standalone web client using React 19, TypeScript 6, and Vite 8 in `./frontend`.
+  - Built bespoke enterprise dark mode design system (`frontend/src/index.css`) featuring custom CSS tokens, glassmorphism cards, Inter/JetBrains Mono typography, custom scrollbars, and accessible contrast.
+  - Implemented persistent sidebar navigation with active states, dynamic breadcrumbs, live badge counters, and real-time operational status indicators.
+  - Created 5 core operational views with responsive layouts:
+    - **Overview**: System telemetry, speaker & terminal statistics, verification success rate, calibrated threshold gauge (0.2500 SERVER_THRESHOLD), urgent threat incident stream, and recent activity table.
+    - **Enrolled Speakers**: Searchable, filterable identity table across all 12 registered speakers, 192-dim vector preview modal, and clearly labelled prototype enrollment placeholder.
+    - **Voice Verification Simulator**: Step-by-step biometric verification workflow with target terminal/speaker selection, dynamic 4-digit CSPRNG liveness challenge with 60-second TTL countdown, simulated 16kHz PCM audio wave, and selectable scenarios (Genuine, Impostor, Spoof) with instant verdict cards.
+    - **Access Terminals**: Physical ESP32 hardware terminal table with HMAC-SHA256 credentials, key versions, lifecycle statuses (`active`, `suspended`, `revoked`), last-seen telemetry, and terminal registration placeholder.
+    - **Security Audit Log**: Security event table with severity filtering (`critical`, `high`, `medium`, `low`), search, and full event payload inspection modal.
+  - Built typed, coherent mock data module (`frontend/src/data/mockData.ts`) cleanly decoupled from presentation components.
+  - Production build (`npm run build`) compiles cleanly in 147ms; linter (`oxlint`) passes with 0 errors and 0 warnings.
+  - Local development server verified live at `http://127.0.0.1:5173/` via automated browser testing.
+  - All 165 backend automated tests, ML evaluation, and calibration remain 100% passing.
+
 - **Milestone 3C.3c: Database-Backed Device Authentication Integration**
   - Integrated `DeviceRepository` into `app/core/device_auth.py` for persistent terminal authentication:
     - Added `lookup_device_record()` querying `DeviceRecord` via `DeviceRepository`, eagerly loading attributes and expunging records to ensure safe detached usage.

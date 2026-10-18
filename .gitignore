@@ -23,6 +23,12 @@ var/
 venv/
 ENV/
 
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
 # OS Files
 .DS_Store
 .DS_Store?

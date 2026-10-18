@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.3c — Database-Backed Device Authentication Integration (Completed)  
+**Current Milestone:** Milestone 4A — React Frontend Foundation and Dashboard Prototype (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (All 165 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Frontend Vite dev server active on http://127.0.0.1:5173, production build passing, 165 backend automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.3c integrates persistent database device authentication into `app/core/device_auth.py` via `DeviceRepository`. Hardware access terminals authenticating via replay-resistant HMAC-SHA256 (Scheme A) or pre-shared key (Scheme B) are verified against persistent `DeviceRecord` entities in the `devices` table. Unknown, suspended, and revoked devices are strictly rejected with HTTP 401 Unauthorized before any sensitive operations occur. Database lookup failures fail closed with sanitized HTTP 500 without leaking database details. Cryptographic secret verifier hashing (`secret_hash`), timestamp drift limits (300s), constant-time signature comparisons, and atomic nonce replay resistance are fully preserved. Raw credentials and signing keys are never persisted in the database or logged. The automated test suite has expanded to 165 passing tests with zero regressions.
+Milestone 4A delivers the first modern, polished React frontend for VoiceLock Enterprise alongside the existing FastAPI backend and Streamlit reference application. Scaffolded in `./frontend` with React 19, TypeScript 6, and Vite 8, the application features an enterprise security-operations console designed with dark-theme glassmorphism, Inter and JetBrains Mono typography, persistent sidebar navigation, and 5 operational pages: Operations Overview & Telemetry, Enrolled Speakers, Voice Verification Simulator (with dynamic challenge-response, countdown TTL, and multi-scenario biometric verdicts), Access Terminals (IoT ESP32 status and key versions), and Security Audit Log. All views are decoupled via a structured mock-data module with explicit prototype labelling. The production build (`npm run build`) compiles cleanly in under 200ms with zero linter errors, and the active local development server (`http://127.0.0.1:5173/`) has been visually verified in a browser session. All 165 backend tests and ML evaluation baselines continue passing without regressions.
 
 
 ---
@@ -374,22 +374,52 @@ Milestone 3C.3c integrates persistent database device authentication into `app/c
     12. Secrets hygiene: Database record stores only one-way cryptographic hash, never plaintext.
   - Total automated tests expanded to 165 passing tests in 3.22s.
 
+### Milestone 4A: React Frontend Foundation & Dashboard Prototype (Completed)
+- **Scaffolding & Architecture (`./frontend`):**
+  - Scaffolded modern standalone web client using React 19, TypeScript 6, and Vite 8 in `./frontend`, alongside the FastAPI backend and Streamlit reference app.
+  - Implemented bespoke enterprise dark mode design system (`frontend/src/index.css`) with custom CSS variables, glassmorphism cards, Inter/JetBrains Mono typography, custom scrollbars, and accessible contrast.
+  - Configured root and frontend `.gitignore` rules to exclude `frontend/node_modules/`, `frontend/dist/`, and local files.
+- **Components & Navigation Architecture:**
+  - `Layout`: Persistent responsive sidebar navigation with real-time badge counts, operational status indicator, and dynamic breadcrumbs.
+  - `OverviewPage`: Primary telemetry grid (speakers, terminals, success rate, critical alerts), calibrated biometric model bar (0.25 threshold gauge, ECAPA-TDNN mean scores), threat alerts panel, and recent biometric verifications table.
+  - `SpeakersPage`: Searchable, filterable identity table (All, Active, Suspended, Revoked) across all 12 registered speakers, 192-dim vector preview modal, and clearly labelled prototype enrollment placeholder.
+  - `VerificationPage`: Interactive biometric verification simulator featuring:
+    - Target terminal & speaker selection.
+    - Dynamic CSPRNG 4-digit spoken challenge generation with 60-second TTL countdown timer.
+    - Simulated 16kHz PCM audio waveform visualization.
+    - Selectable evaluation scenarios: Genuine User (score 0.8668 >= 0.25, PASS), Impostor Voice (score 0.1842 < 0.25, DENIED), and Spoof/Liveness Mismatch (burn challenge, SPOOF DETECTED).
+    - Latency reporting (118ms) and relay actuation status.
+  - `DevicesPage`: Physical access terminals table (ESP32 portals, locations, IP addresses, HMAC-SHA256 scheme, key versions, status) with detailed terminal modal and registration interface placeholder.
+  - `SecurityEventsPage`: Comprehensive security audit log with severity filtering (`critical`, `high`, `medium`, `low`), search, and full event payload inspection modal.
+- **Decoupled Mock Data Module (`frontend/src/data/mockData.ts`):**
+  - Built typed, coherent mock data mirroring real VoiceLock domain entities (12 speakers from evaluation split, 5 hardware terminals, security event stream, and verification records) with explicit `isSimulated: true` metadata.
+- **Engineering Quality & Verification:**
+  - TypeScript strict typing across all interfaces and types (`frontend/src/types/index.ts`).
+  - `npm run lint` (`oxlint`): 0 warnings, 0 errors.
+  - `npm run build`: Production bundle built cleanly in 147ms (HTML 0.98 kB, CSS 8.24 kB, JS 299 kB).
+  - Development server running on `http://127.0.0.1:5173/`, verified live in a browser session across all 5 navigation views and modals.
+  - Zero regressions on backend test suite: 165/165 tests passing.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.22s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
-| **Database Device Auth Suite**| `.venv/bin/pytest tests/test_device_auth_database.py -v` | 0 | **12/12 tests PASSED** (HMAC, PSK, unknown, revoked, suspended, invalid sig, replay, stale, DB failure, separation, hygiene) |
-| **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, validation, duplicates, revocation, pagination, status filtering, rollback) |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema, device schema & rollback) |
-| **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** (mapped, unmapped, mismatch, tamper, admin, fail-closed, pre-inference, device, regression) |
-| **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** (CRUD, scalar queries, 1-to-1 uniqueness, cascade delete) |
-| **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, active filters, validation, duplicate rejection, rollback) |
-| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** (HMAC, PSK, anti-replay, nonce ordering, ASGI limiter, CORS, rate limits) |
-| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** (token verification, RBAC, revocation, WS auth, identity binding) |
-| **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** (identity separation, RBAC, endpoints) |
-| **Baseline API Test Suite** | `.venv/bin/pytest tests/test_api.py -v` | 0 | **35/35 tests PASSED** (baseline contracts, upload limits, challenge lifecycle) |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 147ms** (dist/index.html, dist/assets/index.css, dist/assets/index.js) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 17 files |
+| **Frontend Live Dev Server** | `curl -I http://127.0.0.1:5173/` | 0 | **HTTP/1.1 200 OK** (Vite v8.3.4 ready in 95ms) |
+| **Browser UI Validation** | Automated browser subagent | 0 | **All 5 pages, search filters, challenge countdown, and modals verified** |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.63s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Database Device Auth Suite**| `.venv/bin/pytest tests/test_device_auth_database.py -v` | 0 | **12/12 tests PASSED** |
+| **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** |
+| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** |
+| **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** |
+| **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** |
+| **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** |
+| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** |
+| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** |
+| **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** |
+| **Baseline API Test Suite** | `.venv/bin/pytest tests/test_api.py -v` | 0 | **35/35 tests PASSED** |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -398,31 +428,27 @@ Milestone 3C.3c integrates persistent database device authentication into `app/c
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
+1. **Frontend Prototype Mock Data Scope:**
+   - *Status:* In Milestone 4A, frontend data is mock-driven. Real backend API integration, Firebase token exchange, and browser audio recording are scheduled for subsequent milestones.
+2. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with persistent storage (PostgreSQL/Redis) in Milestone 3C.4 (Shared Challenge & Rate Limit Storage).
-2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
+3. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
-3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
+4. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
    - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
    - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
-4. **Voice Cloning Limitations (`SEC-010`):**
+5. **Voice Cloning Limitations (`SEC-010`):**
    - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
-## 5. Next Recommended Step (Mandatory Next Priority)
-Proceed to **Milestone 4A: React Frontend Foundation and Dashboard Prototype**:
-1. Initialize React + TypeScript + Vite modern web application in `./frontend` alongside the existing Streamlit app.
-2. Build responsive VoiceLock dashboard with navigation and pages for:
-   - Overview & Telemetry
-   - Enrolled Speakers Management
-   - Voice Verification Portal
-   - Physical Access Terminal (IoT Device) Registry
-   - Security Audit & Event Log
-3. Connect with clearly labeled mock data initially.
-4. Ensure local development server (`npm run dev`) and production bundle build (`npm run build`) succeed.
-5. Add frontend verification checks and synchronize documentation.
+## 5. Next Recommended Step
+Proceed to **Milestone 4B: Firebase Authentication & Frontend Session Management**:
+1. Integrate Firebase Web SDK / Auth in the React frontend.
+2. Implement secure login / sign-in screen with role-aware routing.
+3. Manage user session state and RS256 Bearer ID tokens.
+4. Add authenticated API client service configured to attach Bearer tokens to protected backend routes (`/speakers`, `/verify`, `/identify`).
 
 
 
