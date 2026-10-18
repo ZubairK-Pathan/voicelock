@@ -20,6 +20,11 @@ from app.repositories.device_repository import (
     DuplicateDeviceError,
     DeviceNotFoundError,
 )
+from app.repositories.verification_event_repository import (
+    VerificationEventRepository,
+    VerificationEventRepositoryError,
+    VerificationEventNotFoundError,
+)
 
 __all__ = [
     "SpeakerRepository",
@@ -34,5 +39,8 @@ __all__ = [
     "DeviceRepositoryError",
     "DuplicateDeviceError",
     "DeviceNotFoundError",
+    "VerificationEventRepository",
+    "VerificationEventRepositoryError",
+    "VerificationEventNotFoundError",
 ]
 

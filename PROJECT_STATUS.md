@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 3C.1 — Persistent Verification Event Schema (Completed)  
+**Current Milestone:** Increment 3C.2 — Verification Event Repository (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Persistent verification event schema and Alembic migration established, 238 backend automated tests passing in 5.32s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Verification event repository established with caller-controlled transactions and bounded windowed queries, 251 backend automated tests passing in 5.41s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3C.1 establishes the foundational database schema and Alembic migration for persistent biometric verification events (`verification_events` table). The schema introduces the `VerificationEvent` SQLAlchemy 2.x declarative entity and `VerificationOutcome` bounded outcome enumeration directly mapped from verified execution paths in `POST /verify` (`verified`, `rejected`, `challenge_failed`, `unauthorized`, `error`). The model enforces strict bounded verification flows (`web`, `device`), captures timezone-aware UTC timestamps (`created_at`), and associates optional identity context (`user_id`, `speaker_id`, `device_id`, `request_id`). To ensure regulatory and audit compliance, foreign keys to `speakers.speaker_id` and `devices.device_id` utilize `ondelete="SET NULL"`, guaranteeing that when a speaker or device is deleted from its registry table, historical verification audit rows are preserved with foreign references scrubbed. The schema adheres to strict data minimization guarantees: raw audio, audio paths, 192-dimensional embeddings, similarity scores, passwords, bearer tokens, and device secrets are strictly excluded from persistence. Composite indexes (`ix_verification_events_created_outcome`) and single-column indexes are provisioned for future time-windowed metric aggregations. Alembic revision `d0199d309a47` (`down_revision = '8046c184216a'`) provides a fully verified, reversible upgrade and downgrade path. **Note: Verification endpoint logging hooks, event journal recording, and React dashboard telemetry integration are intentionally not implemented in this increment and will be established in subsequent increments (3C.2 and 3C.3).** The automated test suite expanded to **238 backend tests passing in 5.32s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
+Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/verification_event_repository.py`, providing a dedicated SQLAlchemy 2.0 data access layer for the persistent `VerificationEvent` audit journal. The repository encapsulates all query logic, pagination, and database aggregates while adhering strictly to the architecture's caller-controlled transaction convention (methods add records and flush to populate generated integer primary keys without calling `commit()` or `rollback()`). Key capabilities include `create_event(...)` with bounded outcome and flow validation, `get_event(...)` and `get_or_raise(...)` for ID retrieval, `list_events(...)` with bounded pagination (1 to 500) and deterministic newest-first ordering (`created_at DESC, id DESC`), `count_events(...)` executing database `func.count(id)` aggregates, and `count_by_outcome(...)` computing grouped outcome breakdowns. All time-window filters adhere strictly to the `[start_time, end_time)` (start inclusive, end exclusive) UTC interval convention. Raw audio, audio paths, 192-d vectors, similarity scores, passwords, bearer tokens, and device secrets are strictly excluded from all queries, logs, and representations. **Note: Verification endpoint route instrumentation and React dashboard integration are intentionally not implemented in this increment and remain scheduled for subsequent increments.** The automated test suite expanded to **251 backend tests passing in 5.41s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
 
 
 ---
@@ -551,6 +551,35 @@ Increment 3C.1 establishes the foundational database schema and Alembic migratio
   - Verified clean frontend suite (**23/23 tests passing**, 0 lint errors, build passing in 182ms).
   - ML sanity check verified (ECAPA-TDNN CPU inference score: 0.8668).
 
+### Increment 3C.2: Verification Event Repository (Completed)
+- **Repository Implementation (`app/repositories/verification_event_repository.py`, `app/repositories/__init__.py`, `app/db/__init__.py`):**
+  - Created `VerificationEventRepository` encapsulating all persistence, retrieval, and aggregate logic for `VerificationEvent` entities.
+  - Enforced caller-controlled transaction semantics: all methods add entities and flush to expose database-generated primary keys without calling `commit()` or `rollback()`.
+  - Implemented `create_event(...)` validating outcomes against `VALID_VERIFICATION_OUTCOMES` and flows against `VALID_VERIFICATION_FLOWS`, stripping whitespace from identifiers, handling timezone-aware UTC timestamps, and flushing the entity.
+  - Implemented `get_event(...)` and `get_or_raise(...)` (raising `VerificationEventNotFoundError` on missing ID).
+  - Implemented `list_events(...)` with bounded pagination (1 to 500, non-negative offset), deterministic newest-first ordering (`created_at DESC, id DESC`), and optional filters: outcome, verification_flow, user_id, speaker_id, device_id, and time window `[start_time, end_time)` in UTC.
+  - Implemented `count_events(...)` using database `func.count(id)` aggregates matching all optional filters and time windows.
+  - Implemented `count_by_outcome(...)` computing grouped outcome counts over an optional `[start_time, end_time)` time window, guaranteeing all 5 valid outcome states are returned with counts $\ge 0$.
+  - Strictly enforced the `[start_time, end_time)` (start inclusive, end exclusive) UTC interval convention across all query methods, rejecting invalid date ranges (`start_time > end_time`) with `ValueError`.
+  - Re-exported `VerificationEventRepository`, `VerificationEventRepositoryError`, and `VerificationEventNotFoundError` in `app.repositories` and `app.db`.
+- **Automated Verification:**
+  - Added dedicated unit test suite in `tests/test_verification_event_repository.py` (13 tests):
+    - Non-null session requirement.
+    - Minimal event creation and generated ID.
+    - Full identity and timestamp creation with `VerificationOutcome` enum.
+    - Caller-controlled transaction rollback semantics.
+    - Retrieval of existing and missing IDs (`get_event` and `get_or_raise`).
+    - Pagination, offset, and deterministic newest-first ordering.
+    - Pagination boundary validations (`limit < 1`, `limit > 500`, `offset < 0`).
+    - Outcome and verification flow filtering.
+    - Strict `[start_time, end_time)` UTC boundary tests (start inclusive, end exclusive).
+    - Invalid date range rejection.
+    - Aggregate `count_events` on empty and populated databases with filters.
+    - Grouped `count_by_outcome` aggregates over time windows and flow filters.
+    - Input validation on invalid outcomes and flows.
+  - Total backend automated test suite expanded from 238 to **251 tests passing in 5.41s**.
+  - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 178ms).
+
 ---
 
 ## 3. Verified Test Results
@@ -558,14 +587,15 @@ Increment 3C.1 establishes the foundational database schema and Alembic migratio
 | :--- | :--- | :--- | :--- |
 | **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 154ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 182ms** |
-| **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.05s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 178ms** |
+| **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
+| **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.08s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
 | **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **238/238 tests PASSED in 5.32s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **251/251 tests PASSED in 5.41s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -576,7 +606,7 @@ Increment 3C.1 establishes the foundational database schema and Alembic migratio
 
 ## 4. Known Issues & Remaining Security Risks
 1. **Uninstrumented Verification Logging (Current Limitation):**
-   - *Status:* The schema and migration for `verification_events` are established, but `POST /verify` does not yet record verification events to the database. Event persistence will be implemented in Increment 3C.2.
+   - *Status:* `VerificationEvent` schema, migration, and `VerificationEventRepository` are established, but `POST /verify` does not yet log verification events into the database during live requests. Route instrumentation will be implemented in Increment 3C.3.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
@@ -593,10 +623,11 @@ Increment 3C.1 establishes the foundational database schema and Alembic migratio
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3C.2: Verification Event Repository & Logging Instrumentation**:
-1. Implement `VerificationEventRepository` in `app/repositories/verification_event_repository.py` supporting write operations and windowed aggregation queries.
-2. Instrument `POST /verify` (`app/api/routes_verification.py`) to record persistent verification events on verified, rejected, challenge_failed, unauthorized, and error execution paths.
-3. Keep dashboard integration and security event recording separated into their respective milestones.
+Proceed to **Increment 3C.3: Verification Route Event Journal Instrumentation**:
+1. Wire `VerificationEventRepository` into `POST /verify` (`app/api/routes_verification.py`).
+2. Record persistent verification events for `verified`, `rejected`, `challenge_failed`, `unauthorized`, and `error` outcomes within the caller's transaction.
+3. Verify fail-closed semantics and test coverage across web and device verification flows.
+4. Keep React dashboard integration separated into Increment 3C.4.
 
 
 

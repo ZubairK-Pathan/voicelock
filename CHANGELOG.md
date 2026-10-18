@@ -10,6 +10,19 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3C.2: Verification Event Repository**
+  - Implemented `VerificationEventRepository` in `app/repositories/verification_event_repository.py` for persistent `VerificationEvent` query execution and aggregation.
+  - Adhered strictly to caller-controlled transaction conventions: repository methods flush without calling `commit()` or `rollback()`.
+  - Implemented `create_event(...)` with input validation, whitespace stripping, and UTC timestamp handling.
+  - Implemented `get_event(id)` and `get_or_raise(id)` (raising typed `VerificationEventNotFoundError`).
+  - Implemented `list_events(...)` with bounded pagination (1 to 500, non-negative offset), deterministic ordering (`created_at DESC, id DESC`), and optional filters (outcome, flow, user_id, speaker_id, device_id, UTC time window).
+  - Implemented `count_events(...)` with database aggregate `func.count(id)` queries.
+  - Implemented `count_by_outcome(...)` computing grouped outcome distributions across all valid outcomes, supporting `[start_time, end_time)` time windows and flow filters.
+  - Strictly enforced `[start_time, end_time)` (start inclusive, end exclusive) UTC interval convention.
+  - Re-exported repository and exceptions in `app/repositories/__init__.py` and `app/db/__init__.py`.
+  - Added 13 unit tests in `tests/test_verification_event_repository.py`.
+  - Total automated backend suite expanded from 238 to **251 tests passing in 5.41s**.
+  - Documented that verification route instrumentation and dashboard integration remain future work.
 - **Increment 3C.1: Persistent Verification Event Schema**
   - Designed and created the `VerificationEvent` declarative model in `app/db/base.py` for persistent biometric access event journaling.
   - Defined `VerificationOutcome` string enumeration mapping bounded execution outcomes directly from `POST /verify`: `verified`, `rejected`, `challenge_failed`, `unauthorized`, and `error`.

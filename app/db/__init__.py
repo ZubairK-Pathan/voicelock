@@ -31,6 +31,11 @@ from app.repositories.device_repository import (
     DuplicateDeviceError,
     DeviceNotFoundError,
 )
+from app.repositories.verification_event_repository import (
+    VerificationEventRepository,
+    VerificationEventRepositoryError,
+    VerificationEventNotFoundError,
+)
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -65,6 +70,9 @@ __all__ = [
     "DeviceRepositoryError",
     "DuplicateDeviceError",
     "DeviceNotFoundError",
+    "VerificationEventRepository",
+    "VerificationEventRepositoryError",
+    "VerificationEventNotFoundError",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",
