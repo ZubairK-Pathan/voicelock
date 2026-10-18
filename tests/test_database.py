@@ -565,6 +565,74 @@ def test_devices_schema_migration_and_constraints(monkeypatch):
 
     finally:
         reset_engine()
+
+def test_speakers_embedding_schema_migration(monkeypatch):
+    """
+    Verify migration 8046c184216a adds embedding_json to speakers table,
+    supports ORM insert/query, and single-revision rollback (8046c184216a -> 316dea338f3b)
+    cleanly drops embedding_json.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Upgrade to head (includes 8046c184216a)
+        command.upgrade(alembic_cfg, "head")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        columns = [col["name"] for col in inspector.get_columns("speakers")]
+        assert "embedding_json" in columns
+        engine.dispose()
+
+        # 2. Insert SpeakerRecord with embedding_json and query back
+        test_json = '[-0.123, 0.456]'
+        with get_db_context() as session:
+            speaker = SpeakerRecord(
+                speaker_id="ZubairEmbedding",
+                full_name="Zubair With Vector",
+                status="active",
+                embedding_dim=192,
+                embedding_json=test_json,
+            )
+            session.add(speaker)
+
+        with get_db_context() as session:
+            loaded = session.scalar(select(SpeakerRecord).where(SpeakerRecord.speaker_id == "ZubairEmbedding"))
+            assert loaded is not None
+            assert loaded.embedding_json == test_json
+
+        reset_engine()
+
+        # 3. Rollback single revision (8046c184216a -> 316dea338f3b)
+        command.downgrade(alembic_cfg, "316dea338f3b")
+
+        engine_rb = create_db_engine(disposable_url)
+        inspector_rb = inspect(engine_rb)
+        columns_rb = [col["name"] for col in inspector_rb.get_columns("speakers")]
+        assert "embedding_json" not in columns_rb
+        # Core columns still preserved
+        assert "speaker_id" in columns_rb
+        engine_rb.dispose()
+
+        # 4. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        columns_reup = [col["name"] for col in inspect(engine_reup).get_columns("speakers")]
+        assert "embedding_json" in columns_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
         if tmp_db_path.exists():
             try:
                 tmp_db_path.unlink()

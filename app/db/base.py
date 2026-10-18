@@ -61,6 +61,7 @@ class SpeakerRecord(Base):
         nullable=False,
     )
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     @property
     def is_active(self) -> bool:

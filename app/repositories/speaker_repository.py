@@ -6,12 +6,14 @@ Transaction boundaries are owned by the caller (session context manager / depend
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Sequence, Union
+import numpy as np
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.base import SpeakerRecord
+from app.core.embeddings import serialize_embedding, deserialize_embedding
 
 
 class SpeakerRepositoryError(Exception):
@@ -51,9 +53,12 @@ class SpeakerRepository:
         embedding_dim: int = 192,
         sample_count: int = 1,
         metadata_json: Optional[str] = None,
+        embedding_json: Optional[str] = None,
+        embedding: Optional[Union[np.ndarray, Sequence[float]]] = None,
     ) -> SpeakerRecord:
         """
         Create and persist a new SpeakerRecord in the database.
+        Optionally persists the 192-d embedding vector.
         Flushes to the database transaction to populate autoincrement ID and verify constraints.
         Does NOT commit the transaction.
         """
@@ -71,6 +76,11 @@ class SpeakerRepository:
         if sample_count < 1:
             raise ValueError("sample_count must be at least 1.")
 
+        if embedding is not None:
+            embedding_json = serialize_embedding(embedding, expected_dim=embedding_dim)
+        elif embedding_json is not None:
+            deserialize_embedding(embedding_json, expected_dim=embedding_dim)
+
         now = datetime.now(timezone.utc)
         record = SpeakerRecord(
             speaker_id=clean_speaker_id,
@@ -81,6 +91,7 @@ class SpeakerRepository:
             created_at=now,
             updated_at=now,
             metadata_json=metadata_json,
+            embedding_json=embedding_json,
         )
 
         self.session.add(record)
@@ -117,6 +128,37 @@ class SpeakerRepository:
         record = self.get_by_speaker_id(speaker_id)
         if record is None:
             raise SpeakerNotFoundError(f"Speaker '{speaker_id}' not found.")
+        return record
+
+    def get_embedding(self, speaker_id: str) -> Optional[np.ndarray]:
+        """
+        Retrieve the deserialized float32 NumPy embedding vector for a speaker.
+        Returns None if the speaker record is not found or has no embedding stored.
+        """
+        record = self.get_by_speaker_id(speaker_id)
+        if record is None or not record.embedding_json:
+            return None
+        return deserialize_embedding(record.embedding_json, expected_dim=record.embedding_dim)
+
+    def set_embedding(
+        self,
+        speaker_id: str,
+        embedding: Union[np.ndarray, Sequence[float], str],
+    ) -> SpeakerRecord:
+        """
+        Set or replace the 192-d biometric embedding for an existing speaker.
+        Flushes changes to the session without committing.
+        Raises SpeakerNotFoundError if the speaker does not exist.
+        Raises ValueError if embedding validation fails.
+        """
+        record = self.get_or_raise(speaker_id)
+        if isinstance(embedding, str):
+            deserialize_embedding(embedding, expected_dim=record.embedding_dim)
+            record.embedding_json = embedding
+        else:
+            record.embedding_json = serialize_embedding(embedding, expected_dim=record.embedding_dim)
+        record.updated_at = datetime.now(timezone.utc)
+        self.session.flush()
         return record
 
     def list_speakers(
@@ -158,9 +200,11 @@ class SpeakerRepository:
         status: Optional[str] = None,
         sample_count: Optional[int] = None,
         metadata_json: Optional[str] = None,
+        embedding_json: Optional[str] = None,
+        embedding: Optional[Union[np.ndarray, Sequence[float]]] = None,
     ) -> Optional[SpeakerRecord]:
         """
-        Update permitted metadata and lifecycle fields of an existing speaker.
+        Update permitted metadata, lifecycle fields, and embedding of an existing speaker.
         Returns the updated record, or None if the speaker does not exist.
         Flushes changes to the session without committing.
         """
@@ -183,6 +227,12 @@ class SpeakerRepository:
 
         if metadata_json is not None:
             record.metadata_json = metadata_json
+
+        if embedding is not None:
+            record.embedding_json = serialize_embedding(embedding, expected_dim=record.embedding_dim)
+        elif embedding_json is not None:
+            deserialize_embedding(embedding_json, expected_dim=record.embedding_dim)
+            record.embedding_json = embedding_json
 
         record.updated_at = datetime.now(timezone.utc)
         self.session.flush()

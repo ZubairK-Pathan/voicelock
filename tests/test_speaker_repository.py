@@ -18,9 +18,11 @@ Tests:
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 from sqlalchemy.orm import sessionmaker
 
+from audio_utils import cosine_similarity
 from app.db.base import Base, SpeakerRecord
 from app.db.session import create_db_engine
 from app.repositories.speaker_repository import (
@@ -276,3 +278,142 @@ def test_caller_controlled_transaction_rollback(db_session):
 
     # Record was not committed and is gone
     assert repo.get_by_speaker_id("RollbackCandidate") is None
+
+
+# ─── Embedding Persistence & Retrieval Tests ───────────────────────────────────
+
+def test_create_speaker_with_embedding(db_session):
+    """Verify creating a speaker with a 192-d numpy float32 embedding."""
+    repo = SpeakerRepository(db_session)
+    embedding = np.random.default_rng(123).normal(size=192).astype(np.float32)
+
+    speaker = repo.create(
+        speaker_id="Advait",
+        full_name="Advait Sharma",
+        embedding=embedding,
+    )
+    db_session.commit()
+
+    assert speaker.embedding_json is not None
+    loaded_embedding = repo.get_embedding("Advait")
+    assert loaded_embedding is not None
+    assert loaded_embedding.shape == (192,)
+    assert loaded_embedding.dtype == np.float32
+    np.testing.assert_allclose(embedding, loaded_embedding, rtol=1e-5, atol=1e-6)
+
+    # Cosine similarity must be functionally identical
+    sim = cosine_similarity(embedding, loaded_embedding)
+    assert sim >= 0.999999
+
+
+def test_create_speaker_with_embedding_json(db_session):
+    """Verify creating a speaker with valid pre-serialized embedding JSON string."""
+    from app.core.embeddings import serialize_embedding
+    repo = SpeakerRepository(db_session)
+    embedding = np.ones(192, dtype=np.float32) * 0.1
+    emb_json = serialize_embedding(embedding)
+
+    speaker = repo.create(
+        speaker_id="Omar",
+        full_name="Omar Farooq",
+        embedding_json=emb_json,
+    )
+    db_session.commit()
+
+    loaded = repo.get_embedding("Omar")
+    assert loaded is not None
+    assert loaded.shape == (192,)
+    np.testing.assert_allclose(embedding, loaded, rtol=1e-5, atol=1e-6)
+
+
+def test_create_speaker_rejects_invalid_embedding(db_session):
+    """Verify invalid embedding dimensions, NaN, or malformed JSON raise ValueError on create."""
+    repo = SpeakerRepository(db_session)
+
+    # Wrong dimension
+    with pytest.raises(ValueError, match="Embedding dimension mismatch: expected 192, got 100"):
+        repo.create(speaker_id="BadDim", embedding=np.zeros(100, dtype=np.float32))
+
+    # NaN in embedding
+    bad_nan = np.zeros(192, dtype=np.float32)
+    bad_nan[5] = np.nan
+    with pytest.raises(ValueError, match="Embedding contains non-finite values"):
+        repo.create(speaker_id="BadNaN", embedding=bad_nan)
+
+    # Malformed JSON string
+    with pytest.raises(ValueError, match="Invalid JSON in embedding payload"):
+        repo.create(speaker_id="BadJSON", embedding_json="{malformed}")
+
+
+def test_get_embedding_missing_or_unknown_speaker(db_session):
+    """Verify get_embedding returns None when speaker is unknown or has no embedding."""
+    repo = SpeakerRepository(db_session)
+
+    # Unknown speaker returns None
+    assert repo.get_embedding("UnknownSpeaker") is None
+
+    # Speaker without embedding returns None
+    repo.create(speaker_id="NoEmbeddingUser")
+    db_session.commit()
+    assert repo.get_embedding("NoEmbeddingUser") is None
+
+
+def test_set_embedding_updates_existing_speaker(db_session):
+    """Verify set_embedding updates embedding and advances updated_at."""
+    repo = SpeakerRepository(db_session)
+    speaker = repo.create(speaker_id="Parth", full_name="Parth T.")
+    db_session.commit()
+    created_updated_at = speaker.updated_at
+
+    emb = np.random.default_rng(999).normal(size=192).astype(np.float32)
+    updated_speaker = repo.set_embedding("Parth", emb)
+    db_session.commit()
+
+    assert updated_speaker.embedding_json is not None
+    assert updated_speaker.updated_at >= created_updated_at
+    retrieved_emb = repo.get_embedding("Parth")
+    assert retrieved_emb is not None
+    np.testing.assert_allclose(emb, retrieved_emb, rtol=1e-5, atol=1e-6)
+
+
+def test_set_embedding_unknown_speaker_raises(db_session):
+    """Verify set_embedding raises SpeakerNotFoundError for unknown speaker."""
+    repo = SpeakerRepository(db_session)
+    with pytest.raises(SpeakerNotFoundError, match="Speaker 'Ghost' not found"):
+        repo.set_embedding("Ghost", np.zeros(192, dtype=np.float32))
+
+
+def test_update_method_with_embedding(db_session):
+    """Verify standard update() method can update embedding."""
+    repo = SpeakerRepository(db_session)
+    repo.create(speaker_id="Umair")
+    db_session.commit()
+
+    emb = np.ones(192, dtype=np.float32) * 0.25
+    record = repo.update(speaker_id="Umair", embedding=emb)
+    db_session.commit()
+
+    assert record is not None
+    retrieved = repo.get_embedding("Umair")
+    assert retrieved is not None
+    np.testing.assert_allclose(emb, retrieved, rtol=1e-5, atol=1e-6)
+
+
+def test_embedding_transaction_rollback(db_session):
+    """Verify caller rollback discards uncommitted embedding modifications."""
+    repo = SpeakerRepository(db_session)
+    repo.create(speaker_id="RollbackEmbedding")
+    db_session.commit()
+
+    emb = np.ones(192, dtype=np.float32) * 0.77
+    repo.set_embedding("RollbackEmbedding", emb)
+
+    # Pre-rollback it's accessible
+    assert repo.get_embedding("RollbackEmbedding") is not None
+
+    # Caller rolls back
+    db_session.rollback()
+
+    # Embedding was not committed
+    assert repo.get_embedding("RollbackEmbedding") is None
+

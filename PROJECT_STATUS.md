@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 4B — Firebase Authentication & Frontend Session Management (Completed)  
+**Current Milestone:** Increment 1A — Persistent Speaker Embedding Schema & Repository Integration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Frontend authentication and dashboard active on http://127.0.0.1:5173, production build passing, 6 frontend unit tests passing, 165 backend automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Persistent speaker embedding schema & repository active, 191 backend automated tests passing in 2.85s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 4B integrates client-side Firebase Authentication and session management into the VoiceLock Enterprise React application (`frontend/`). Initialized via the modular Firebase Web SDK in `frontend/src/lib/firebase.ts`, the application manages authentication states using an `AuthProvider` with `onAuthStateChanged`, protecting dashboard routes against unauthenticated access and eliminating unauthorized dashboard flashes during session resolution. Unauthenticated operators are routed to a polished Obsidian-themed `SignInPage` featuring email/password inputs, password visibility toggle, client validation, accessible labels, and an interactive Firebase Console setup guide. For local development where web credentials are not yet provisioned, a graceful demonstration mode allows evaluating the authentication workflow with preset operator profiles (`admin@voicelock.internal`, `zubair@voicelock.internal`). Authenticated sessions display the operator identity and role pill (`ADMIN` / `USER`) in the top navigation bar with clean sign-out termination. A typed, standalone `ApiClient` (`frontend/src/lib/apiClient.ts`) was created to safely retrieve fresh RS256 Bearer ID tokens and attach them to protected backend requests (`Authorization: Bearer <ID_TOKEN>`) while shielding tokens from URLs and logs. Frontend unit tests verify token attachment and 401/403 security handling (6/6 passing in 22ms), `oxlint` passes with zero warnings, and all 165 backend automated tests continue passing without regression.
+Increment 1A implements the persistent database schema and data-access foundation for storing and retrieving 192-dimensional ECAPA-TDNN biometric speaker embeddings in VoiceLock Enterprise. A new Alembic migration (`8046c184216a_add_embedding_json_to_speakers.py`) adds a portable, nullable `embedding_json` (`Text`) column to the `speakers` table, compatible with both SQLite and PostgreSQL. A dedicated validation and serialization module (`app/core/embeddings.py`) provides `serialize_embedding()` and `deserialize_embedding()`, strictly enforcing 192-dimensional floating-point vectors, rejecting NaN, Infinity, and non-numeric payloads, and preventing biometric vector leakage in exception messages. `SpeakerRepository` was extended with `get_embedding()` and `set_embedding()`, seamlessly handling vector persistence and retrieval while preserving caller-owned transaction semantics. The automated test suite was expanded from 165 to 191 tests (17 dedicated embedding validation tests, 8 new repository tests, and schema migration upgrade/rollback tests), with zero regressions across ML evaluation (27/27, 100%), threshold calibration (EER 0.00%), and the Streamlit reference application.
 
 
 ---
@@ -429,27 +429,41 @@ Milestone 4B integrates client-side Firebase Authentication and session manageme
   - Live dev server validated on `http://127.0.0.1:5173/` via automated browser testing (login, toggle, setup guide, dashboard access, sign-out transition).
   - Backend regression: **165/165 tests passing** in `pytest`.
 
+
+### Increment 1A: Persistent Speaker Embedding Schema & Repository Integration (Completed)
+- **Database Schema Migration (`alembic/versions/8046c184216a_add_embedding_json_to_speakers.py`):**
+  - Added portable, nullable `embedding_json` (`sa.Text`) column to `speakers` table using batch alter mode for full SQLite and PostgreSQL portability.
+  - Chained cleanly to migration head `316dea338f3b` with reversible `upgrade()` and `downgrade()`.
+  - Updated `SpeakerRecord` entity mapping in `app/db/base.py`.
+- **Validation & Serialization Layer (`app/core/embeddings.py`):**
+  - Built `serialize_embedding` and `deserialize_embedding` supporting both NumPy arrays and sequences.
+  - Strict dimensionality enforcement: requires exactly 192 elements (default for ECAPA-TDNN).
+  - Strict validation: rejects NaN, positive/negative infinity, non-numeric values, booleans, and malformed JSON.
+  - Conversion to `np.float32` preserving exact vector values without altering, re-centering, or normalizing.
+  - Privacy preservation: biometric vector values and elements are strictly excluded from exception messages and logs.
+- **Repository Data-Access Layer (`app/repositories/speaker_repository.py`):**
+  - Updated `create()` and `update()` methods to support `embedding` (`np.ndarray`) and `embedding_json` (`str`).
+  - Added `get_embedding(speaker_id)` returning `Optional[np.ndarray]`.
+  - Added `set_embedding(speaker_id, embedding)` returning updated `SpeakerRecord`.
+  - Preserved transaction contract: operations execute `session.flush()` without committing, ensuring caller ownership.
+- **Automated Verification:**
+  - Added `tests/test_embeddings.py` (17 unit tests) covering roundtrip conversion, cosine similarity preservation, NaN/Inf rejection, and privacy guarantees.
+  - Added 8 unit tests in `tests/test_speaker_repository.py` (20/20 passing) covering embedding creation, retrieval, updates, and transaction rollback.
+  - Added `test_speakers_embedding_schema_migration` in `tests/test_database.py` (17/17 passing) validating Alembic schema migration and single-revision rollback.
+  - Full automated backend test suite expanded from 165 to **191 tests passing in 2.85s**.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
+| **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
+| **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **191/191 tests PASSED in 2.85s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings) |
 | **Frontend Unit Tests** | `npm test` (in `frontend/`) | 0 | **6/6 tests PASSED in 22ms** (Bearer token attachment, unauthenticated routes, error suppression, 401/403 safety, JSON parsing) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 21 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 153ms** (dist/index.html, dist/assets/index.css, dist/assets/index.js) |
-| **Frontend Live Dev Server** | `curl -I http://127.0.0.1:5173/` | 0 | **HTTP/1.1 200 OK** (Vite v8.3.4 ready in 95ms) |
-| **Browser Auth Validation** | Automated browser subagent | 0 | **Sign-in page, password toggle, setup guide, demo login, operator badge, and sign-out verified** |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.45s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
-| **Database Device Auth Suite**| `.venv/bin/pytest tests/test_device_auth_database.py -v` | 0 | **12/12 tests PASSED** |
-| **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** |
-| **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** |
-| **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** |
-| **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** |
-| **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **12/12 tests PASSED** |
-| **Device Auth & Hardening Suite**| `.venv/bin/pytest tests/test_device_auth.py -v` | 0 | **30/30 tests PASSED** |
-| **Auth Security Test Suite** | `.venv/bin/pytest tests/test_auth.py -v` | 0 | **22/22 tests PASSED** |
-| **Auth Policy Unit Tests** | `.venv/bin/pytest tests/test_auth_policy.py -v` | 0 | **7/7 tests PASSED** |
-| **Baseline API Test Suite** | `.venv/bin/pytest tests/test_api.py -v` | 0 | **35/35 tests PASSED** |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 24 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 153ms** |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |

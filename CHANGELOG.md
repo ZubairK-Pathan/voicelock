@@ -10,6 +10,21 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 1A: Persistent Speaker Embedding Schema & Repository Integration**
+  - Added portable, nullable `embedding_json` (`sa.Text`) column to `speakers` table via Alembic migration `8046c184216a_add_embedding_json_to_speakers.py`.
+  - Implemented `app/core/embeddings.py` providing `serialize_embedding()` and `deserialize_embedding()`.
+  - Enforced strict 192-dimension constraint, float32 precision, and rejection of NaN, +Inf, -Inf, non-numeric values, and malformed JSON.
+  - Guaranteed privacy by strictly preventing embedding vectors and values from appearing in logs or error messages.
+  - Extended `SpeakerRepository`:
+    - `create()` and `update()` methods accept `embedding` and `embedding_json`.
+    - Added `get_embedding(speaker_id)` returning deserialized float32 NumPy vector.
+    - Added `set_embedding(speaker_id, embedding)` returning updated `SpeakerRecord`.
+    - Preserved transaction contract: operations execute `session.flush()` without committing, leaving transaction ownership to the caller.
+  - Added dedicated unit test suite `tests/test_embeddings.py` (17 tests) covering roundtrip conversion, cosine similarity preservation (>= 0.999999), invalid dimensions, and privacy guarantees.
+  - Added 8 unit tests in `tests/test_speaker_repository.py` covering embedding persistence, updates, and rollback.
+  - Added `test_speakers_embedding_schema_migration` in `tests/test_database.py` verifying migration upgrade and rollback.
+  - Total automated backend tests expanded from 165 to 191 tests, passing in 2.85s with zero regressions.
+
 - **Milestone 4B: Firebase Authentication & Frontend Session Management**
   - Integrated modular Firebase Web SDK in `frontend/src/lib/firebase.ts` with environment variable validation (`isFirebaseConfigured`).
   - Added sanitized `frontend/.env.example` template with non-secret placeholders and updated `.gitignore` rules to guarantee `.env*` exclusion and `frontend/src/lib/` tracking.
