@@ -14,6 +14,12 @@ from app.repositories.user_speaker_repository import (
     DuplicateUserMappingError,
     UserMappingNotFoundError,
 )
+from app.repositories.device_repository import (
+    DeviceRepository,
+    DeviceRepositoryError,
+    DuplicateDeviceError,
+    DeviceNotFoundError,
+)
 
 __all__ = [
     "SpeakerRepository",
@@ -24,5 +30,9 @@ __all__ = [
     "UserSpeakerRepositoryError",
     "DuplicateUserMappingError",
     "UserMappingNotFoundError",
+    "DeviceRepository",
+    "DeviceRepositoryError",
+    "DuplicateDeviceError",
+    "DeviceNotFoundError",
 ]
 

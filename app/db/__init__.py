@@ -15,6 +15,12 @@ from app.repositories.user_speaker_repository import (
     DuplicateUserMappingError,
     UserMappingNotFoundError,
 )
+from app.repositories.device_repository import (
+    DeviceRepository,
+    DeviceRepositoryError,
+    DuplicateDeviceError,
+    DeviceNotFoundError,
+)
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -41,6 +47,10 @@ __all__ = [
     "UserSpeakerRepositoryError",
     "DuplicateUserMappingError",
     "UserMappingNotFoundError",
+    "DeviceRepository",
+    "DeviceRepositoryError",
+    "DuplicateDeviceError",
+    "DeviceNotFoundError",
     "get_database_url",
     "normalize_database_url",
     "mask_database_url",

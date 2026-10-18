@@ -10,6 +10,31 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.3b: Persistent Device Repository**
+  - Implemented `DeviceRepository` in `app/repositories/device_repository.py` using SQLAlchemy 2.0:
+    - Provides data access operations for `DeviceRecord`: `create()`, `get_by_device_id()`, `get_by_id()`, `get_or_raise()`, `list_devices()`, `update()`, `revoke()`, `delete()`, and `count()`.
+    - Input validation on creation: validates non-empty `device_id` and `secret_hash`, permitted lifecycle statuses (`active`, `suspended`, `revoked`), and minimum `key_version` of 1.
+    - Gracefully handles database unique constraint violations via `DuplicateDeviceError`.
+    - Predictable missing record handling with `DeviceNotFoundError`.
+    - Lifecycle helper: `revoke(device_id)` transitioning device status to `revoked`.
+    - Transaction safety: performs session flushes without unexpected auto-commits, preserving caller-owned transactions.
+    - Sensitive data exclusion: strictly operates on hashed credential verifiers (`secret_hash`), never accepting, storing, or returning plaintext secrets. Excludes biometric audio, embeddings, and Firebase tokens.
+    - Re-exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+  - Added dedicated unit test suite `tests/test_device_repository.py` with 12 tests covering:
+    - Non-null session initialization requirement (`ValueError`).
+    - Device creation, field persistence, and default values.
+    - Input validation on device ID, secret hash, status, and key version.
+    - Unique `device_id` constraint enforcement (`DuplicateDeviceError`).
+    - Lookups by `device_id` and primary key ID.
+    - Missing device behavior (`None` vs `DeviceNotFoundError`).
+    - Paginated device listing and lifecycle status filtering.
+    - Permitted metadata and status updates with updated timestamps.
+    - Revocation transitions (`status="revoked"`).
+    - Deletion and idempotent missing deletion.
+    - Device record aggregation with optional status filtering.
+    - Caller-controlled transaction rollback.
+  - Expanded total automated test suite from 141 to 153 passing tests.
+
 - **Milestone 3C.3a: Device Registry Schema and Migration**
   - Implemented `DeviceRecord` entity in `app/db/base.py` mapping to `devices`:
     - Columns: `id` (PK), `device_id` (`String(64)`, unique, indexed, non-null), `name` (`String(128)`, nullable), `status` (`String(32)`, default="active", non-null), `secret_hash` (`String(255)`, non-null), `key_version` (`Integer`, default=1, non-null), UTC timestamps (`created_at`, `updated_at`), and `metadata_json` (`Text`, nullable).

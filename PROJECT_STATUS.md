@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.3a — Device Registry Schema and Migration (Completed)  
+**Current Milestone:** Milestone 3C.3b — Persistent Device Repository (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (All 141 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (All 153 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.3a establishes the persistent database schema and Alembic migration for the hardware access terminal (IoT device) registry. The newly created `devices` table stores durable device identities (`device_id`), friendly names/locations, lifecycle status (`active`, `suspended`, `revoked`), cryptographic secret verifiers (`secret_hash`), credential versioning (`key_version`), and audit timestamps. Crucially, raw pre-shared keys and HMAC secrets are strictly forbidden from database persistence in plaintext, and no biometric audio, embedding vectors, or Firebase tokens are stored. The migration chain cleanly integrates revision `316dea338f3b` with single-revision downgrade capability preserving speaker and user-mapping tables. The automated test suite has expanded to 141 passing tests with zero regressions.
+Milestone 3C.3b implements the `DeviceRepository` data access layer for physical access terminals (`DeviceRecord`) using SQLAlchemy 2.0. The repository encapsulates persistent terminal operations including record creation, unique `device_id` lookups, primary key lookups, paginated listings, lifecycle status filtering (`active`, `suspended`, `revoked`), metadata updates, revocation transitions, deletion, and record counts. In alignment with established architectural rules, transactions are caller-controlled (flushes without autocommits), raw device secrets or HMAC keys are never accepted, stored, or returned (operating strictly on `secret_hash`), and biometric data, embeddings, or Firebase credentials are never exposed. The automated test suite has expanded to 153 passing tests with zero regressions.
 
 
 ---
@@ -314,12 +314,44 @@ Milestone 3C.3a establishes the persistent database schema and Alembic migration
     - Verifies re-application of `upgrade head`.
   - Total automated tests expanded to 141 passing tests in 2.95s.
 
+### Milestone 3C.3b: Persistent Device Repository (Completed)
+- **DeviceRepository (`app/repositories/device_repository.py`):**
+  - Implemented data access repository for `DeviceRecord` entities using SQLAlchemy 2.0:
+    - `create()`: Creates and persists a new `DeviceRecord`; validates non-empty `device_id` and `secret_hash`, allowed `status` (`active`, `suspended`, `revoked`), positive `key_version`; flushes to detect constraint violations; wraps duplicate errors in `DuplicateDeviceError`.
+    - `get_by_device_id()`: Retrieves a device record by stable unique `device_id`.
+    - `get_by_id()`: Retrieves a device record by integer primary key.
+    - `get_or_raise()`: Resolves a device record or raises `DeviceNotFoundError`.
+    - `list_devices()`: Lists devices ordered alphabetically by `device_id`, supports pagination (`limit`/`offset`) and lifecycle status filtering.
+    - `update()`: Updates permitted metadata (`name`, `metadata_json`) and lifecycle `status` with timestamp update; flushes without autocommit.
+    - `revoke()`: Helper method transitioning a device to `status="revoked"`.
+    - `delete()`: Deletes a device record and returns boolean status.
+    - `count()`: Aggregates total devices with optional status filtering.
+  - Transaction safety: operations perform `flush()` without autocommit, leaving transaction ownership to the caller.
+  - Sensitive data exclusion: operates strictly on hashed credentials (`secret_hash`), never storing, accepting, returning, or logging raw secrets. Biometric audio, embeddings, and Firebase tokens are strictly excluded.
+  - Re-exported in `app/repositories/__init__.py` and `app/db/__init__.py`.
+- **Automated Unit Tests (`tests/test_device_repository.py`):**
+  - Added dedicated test suite covering all 12 core requirements:
+    1. Enforcement of non-null Session initialization (`ValueError`).
+    2. Record creation with valid attributes and defaults.
+    3. Input validation (empty IDs, empty secret hash, invalid status, invalid key version).
+    4. Duplicate `device_id` rejection (`DuplicateDeviceError`).
+    5. Retrieval by `device_id` and primary key integer ID.
+    6. Missing device handling (`None` vs `DeviceNotFoundError`).
+    7. Listing, pagination, and status filtering.
+    8. Metadata updates, lifecycle status transitions, and updated timestamps.
+    9. Revocation helper (`status="revoked"`).
+    10. Deletion and idempotent missing deletion.
+    11. Device counting with optional status filtering.
+    12. Caller-controlled transaction rollback.
+  - Total automated tests expanded to 153 passing tests in 3.00s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **141/141 tests PASSED in 2.95s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 16 Database + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **153/153 tests PASSED in 3.00s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, validation, duplicates, revocation, pagination, status filtering, rollback) |
 | **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema, device schema & rollback) |
 | **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** (mapped, unmapped, mismatch, tamper, admin, fail-closed, pre-inference, device, regression) |
 | **User Speaker Repository Suite**| `.venv/bin/pytest tests/test_user_speaker_repository.py -v` | 0 | **10/10 tests PASSED** (CRUD, scalar queries, 1-to-1 uniqueness, cascade delete) |
@@ -338,7 +370,7 @@ Milestone 3C.3a establishes the persistent database schema and Alembic migration
 ## 4. Known Issues & Remaining Security Risks
 1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3b–3C.4).
+   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3c–3C.4).
 2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
 3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
@@ -350,12 +382,12 @@ Milestone 3C.3a establishes the persistent database schema and Alembic migration
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 3C.3b: Persistent Device Repository and Database Authentication**:
-1. Implement `DeviceRepository` with caller-controlled transactions and CRUD operations (`create`, `get_by_device_id`, `update_status`, `verify_secret`).
-2. Migrate device authentication in `app/core/device_auth.py` to authenticate against persistent `devices` records.
-3. Add repository and authentication tests against disposable databases.
+Proceed to **Milestone 3C.3c: Database-Backed Device Authentication Integration**:
+1. Integrate `DeviceRepository` into `app/core/device_auth.py` for device lookup and credential verifier matching.
+2. Ensure database-backed device authentication fails closed if the database is unreachable or device is suspended/revoked.
+3. Add security tests against disposable databases covering HMAC and PSK authentication with persistent records.
 4. Validate zero regressions across all existing suites.
-5. Commit and push 3C.3b to `feature/enterprise-foundation`.
+5. Commit and push 3C.3c to `feature/enterprise-foundation`.
 
 
 
