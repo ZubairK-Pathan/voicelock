@@ -10,6 +10,18 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 1B: Safe Speaker Database Seeder**
+  - Implemented safe, repeatable speaker database seeder script in `scripts/seed_speakers.py`.
+  - Safely imports the 10 approved real speaker identities (`Advait`, `Amaan Ur Raheman`, `Krish`, `Omar`, `Parth`, `Shreyas`, `Umair`, `Zubair`, `abid`, `vikas`) from `speaker_profiles/profiles.pkl` into the database via `SpeakerRecord` and `SpeakerRepository`.
+  - Excludes non-approved entities (`abc`, `maam`) by default without renaming or inferring real identities.
+  - Implemented strict pre-write validation: validates top-level dictionary structure, confirms all 10 approved keys exist, enforces exactly 192 numeric finite values (rejecting NaN, Inf, non-numeric), and verifies vector serialization.
+  - Ensured idempotency and conflict safety: identical existing records with active status and matching embeddings (`np.allclose`) are safely skipped. Conflicting records (mismatched embeddings, inactive status, or wrong dimension) trigger an immediate atomic rollback and non-zero exit without exposing biometric vectors.
+  - Caller-owned transaction semantics: all inserts in a run commit atomically together via the session context or roll back cleanly on failure.
+  - Grounded sample counts: recorded `sample_count=21` for Advait, Omar, Parth based on sentence-disjoint reference split in `speaker_profiles/split_info.json`, and `sample_count=5` for the other 7 approved participants based on enrollment recordings in `processed_dataset/`.
+  - Provided full CLI support with `--help`, `--dry-run`, and optional `--db-url` overrides, masking database passwords and suppressing vector values.
+  - Built comprehensive unit and integration test suite in `tests/test_seed_speakers.py` (17 tests) using synthetic embeddings and disposable test databases.
+  - Total automated backend tests expanded from 191 to **208 tests passing in 3.33s** with zero regressions.
+
 - **Increment 1A: Persistent Speaker Embedding Schema & Repository Integration**
   - Added portable, nullable `embedding_json` (`sa.Text`) column to `speakers` table via Alembic migration `8046c184216a_add_embedding_json_to_speakers.py`.
   - Implemented `app/core/embeddings.py` providing `serialize_embedding()` and `deserialize_embedding()`.

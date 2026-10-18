@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Increment 1A — Persistent Speaker Embedding Schema & Repository Integration (Completed)  
+**Current Milestone:** Increment 1B — Safe Speaker Database Seeder (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Persistent speaker embedding schema & repository active, 191 backend automated tests passing in 2.85s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Safe speaker database seeder active, 208 backend automated tests passing in 3.33s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 1A implements the persistent database schema and data-access foundation for storing and retrieving 192-dimensional ECAPA-TDNN biometric speaker embeddings in VoiceLock Enterprise. A new Alembic migration (`8046c184216a_add_embedding_json_to_speakers.py`) adds a portable, nullable `embedding_json` (`Text`) column to the `speakers` table, compatible with both SQLite and PostgreSQL. A dedicated validation and serialization module (`app/core/embeddings.py`) provides `serialize_embedding()` and `deserialize_embedding()`, strictly enforcing 192-dimensional floating-point vectors, rejecting NaN, Infinity, and non-numeric payloads, and preventing biometric vector leakage in exception messages. `SpeakerRepository` was extended with `get_embedding()` and `set_embedding()`, seamlessly handling vector persistence and retrieval while preserving caller-owned transaction semantics. The automated test suite was expanded from 165 to 191 tests (17 dedicated embedding validation tests, 8 new repository tests, and schema migration upgrade/rollback tests), with zero regressions across ML evaluation (27/27, 100%), threshold calibration (EER 0.00%), and the Streamlit reference application.
+Increment 1B implements the safe, repeatable speaker database seeder (`scripts/seed_speakers.py`) for importing the ten approved real speaker biometric profiles from `speaker_profiles/profiles.pkl` into the persistent database using `SpeakerRecord` and `SpeakerRepository`. Strict pre-write validation guarantees that every loaded vector is 192-dimensional, numeric, and finite (rejecting NaN, Inf, and non-numeric inputs), with non-approved identities (`abc`, `maam`) filtered out by default. Idempotency and conflict handling ensure that identical existing records are safely skipped, while conflicting existing records (different embeddings, inactive statuses, or dimension mismatches) abort the entire transaction to protect biometric data integrity. The script enforces atomic session commit/rollback, masks credentials, suppresses vector values, and supports `--dry-run` inspection. The automated test suite expanded from 191 to 208 tests (17 dedicated seeder tests in `tests/test_seed_speakers.py`), verifying end-to-end seeding, idempotency, conflict aborts, midway failure rollbacks, and CLI behavior with zero ML or UI regressions.
 
 
 ---
@@ -452,15 +452,29 @@ Increment 1A implements the persistent database schema and data-access foundatio
   - Added `test_speakers_embedding_schema_migration` in `tests/test_database.py` (17/17 passing) validating Alembic schema migration and single-revision rollback.
   - Full automated backend test suite expanded from 165 to **191 tests passing in 2.85s**.
 
+### Increment 1B: Safe Speaker Database Seeder (Completed)
+- **Safe Seeder CLI & Engine (`scripts/seed_speakers.py`):**
+  - Imports 10 approved real speaker identities (`Advait`, `Amaan Ur Raheman`, `Krish`, `Omar`, `Parth`, `Shreyas`, `Umair`, `Zubair`, `abid`, `vikas`) from `speaker_profiles/profiles.pkl` using `SpeakerRecord` and `SpeakerRepository`.
+  - Filters out excluded non-approved identities (`abc`, `maam`) by default without renaming or inferring real identities.
+  - Strict pre-write validation: validates dictionary structure, confirms all 10 approved keys exist, enforces 192-d numeric finite values (rejecting NaN, Inf, non-numeric), and verifies vector serialization.
+  - Idempotency & conflict safety: identical existing records with active status and matching embeddings (`np.allclose`) are skipped without duplicate creation. Conflicting existing records (different embeddings, inactive status, or wrong dimension) trigger an immediate atomic rollback and non-zero exit without exposing biometric vectors.
+  - Preserves caller-owned transaction semantics: all inserts commit atomically together or roll back completely on failure.
+  - Grounded sample counts: `sample_count=21` for Advait, Omar, Parth based on sentence-disjoint reference split in `speaker_profiles/split_info.json`, and `sample_count=5` for the other 7 approved participants based on enrollment recordings in `processed_dataset/`.
+  - CLI features: provides `--help`, `--dry-run` (validation and action reporting without persistent writes), and optional `--db-url` overrides, masking database credentials and suppressing vector values.
+- **Automated Verification:**
+  - Added `tests/test_seed_speakers.py` (17 unit tests) covering synthetic embedding seeding, sample count assignment, excluded identity filtering, strict validation, dry-run safety, rerun idempotency, conflict aborts, unrelated record preservation, midway failure rollbacks, Firebase isolation, unmigrated database detection, and CLI invocations.
+  - Full automated backend test suite expanded from 191 to **208 tests passing in 3.33s**.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
 | **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **191/191 tests PASSED in 2.85s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **208/208 tests PASSED in 3.33s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder) |
 | **Frontend Unit Tests** | `npm test` (in `frontend/`) | 0 | **6/6 tests PASSED in 22ms** (Bearer token attachment, unauthenticated routes, error suppression, 401/403 safety, JSON parsing) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 24 files |
 | **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 153ms** |
@@ -468,6 +482,7 @@ Increment 1A implements the persistent database schema and data-access foundatio
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
 | **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs with zero exceptions across 4 tabs |
+
 
 ---
 
