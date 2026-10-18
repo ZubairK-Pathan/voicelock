@@ -580,14 +580,56 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
   - Total backend automated test suite expanded from 238 to **251 tests passing in 5.41s**.
   - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 178ms).
 
+### Increment 3C.3: Persist Verification Outcomes (Completed)
+- **Verification Route Event Instrumentation (`app/api/routes_verification.py`):**
+  - Integrated `VerificationEventRepository` with `POST /verify` request flow to persist real biometric access outcomes into the `verification_events` database table.
+  - Defined explicit lifecycle state transitions:
+    - **Pre-attempt boundary:** Requests rejected before challenge consumption (401 unauthenticated, 429 rate limit, 400 empty claimed identity, 503 no enrolled speakers, 404 unregistered/inactive speaker, 403 user-speaker unauthorized, 400 missing/expired/reused challenge) do NOT create misleading verification events.
+    - **Attempt initiation:** Challenge is consumed atomically (`store.validate_and_consume`), establishing the start of the verification attempt and enforcing burn-on-use replay protection.
+    - **Challenge failure (`challenge_failed`):** Spoken digit STT liveness evaluation fails (`is_live=False`); persists `challenge_failed` event, rolls back on commit failure without overriding HTTP response, and denies access (`action="DENY"`) without running ML inference.
+    - **Biometric rejection (`rejected`):** Spoken liveness passes but ECAPA-TDNN similarity is below calibrated server threshold; persists `rejected` event and returns denial (`action="DENY"`).
+    - **Biometric acceptance (`verified`):** Spoken liveness passes and ECAPA-TDNN similarity meets/exceeds calibrated server threshold; persists `verified` event and returns access grant (`action="UNLOCK"`).
+    - **Processing failure (`error`):** Audio decoding failure (`sf.LibsndfileError`, `ValueError`), FFmpeg conversion error (`RuntimeError`), or ML inference runtime exception; persists `error` event and returns appropriate sanitized error (400/500).
+  - **Transaction & Failure Policy:**
+    - `VERIFIED`: High-assurance non-repudiation requires persistent audit logging before granting physical or logical access (`action="UNLOCK"`). If `db.commit()` fails on a verified outcome, the system rolls back and fails closed (`HTTPException(500, detail="Database failure recording verification audit trail.")`). Access is strictly NOT granted.
+    - `REJECTED` & `CHALLENGE_FAILED`: Access is already denied (`action="DENY"`). If `db.commit()` fails, the session is rolled back, a warning is logged, and the client's denial response is preserved without exposing database failure or masking the rejection.
+    - `ERROR`: Preserves the underlying client/processing error response (e.g. HTTP 400 for bad audio). If `db.commit()` fails, the session is rolled back, a warning is logged, and the original exception is preserved.
+  - **Guarantees & Invariants:**
+    - **At-most-once attempt recording:** Implemented `event_recorded` execution flag ensuring every consumed attempt creates at most one database event even across exception handlers.
+    - **Trusted identity binding:** `user_id` bound only from authenticated Firebase actor (`actor.uid`); `device_id` bound only from authenticated terminal (`actor.device_id`); `verification_flow` set to `"device"` for IoT terminals and `"web"` for browser users; `speaker_id` bound only from validated, authorized speaker identity.
+    - **Correlation ID propagation:** Sanitizes and propagates `X-Request-ID` or `X-Correlation-ID` headers up to 64 characters; defaults safely to `None`.
+    - **Zero sensitive data leakage:** Zero raw audio bytes, audio paths, 192-d embeddings, similarity scores, bearer tokens, passwords, or device keys persisted.
+- **Automated Verification:**
+  - Added comprehensive test suite in `tests/test_verification_route_audit.py` (15 tests):
+    - Successful verification records exactly one `verified` event with complete metadata.
+    - Biometric rejection records exactly one `rejected` event.
+    - Spoken liveness failure records exactly one `challenge_failed` event without running inference.
+    - Device verification records `verification_flow="device"` and `device_id`.
+    - Corrupt audio decoding failure records `error` event with HTTP 400.
+    - ML inference exception records `error` event with HTTP 500.
+    - FFmpeg conversion failure records `error` event with HTTP 400.
+    - Unauthenticated request (401) records 0 events.
+    - Unauthorized cross-speaker request (403) records 0 events.
+    - Pre-attempt rejections (missing/expired challenge, missing speaker) record 0 events.
+    - Verified outcome commit failure fails closed with HTTP 500.
+    - Rejected outcome commit failure preserves denial HTTP response.
+    - Correlation ID truncation and sanitization (>64 chars).
+    - Zero sensitive data persisted in event records.
+    - Burn-on-use replay protection: replaying consumed challenge returns 400 and creates no second event.
+  - Total backend automated test suite expanded from 251 to **266 tests passing in 6.28s**.
+  - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 186ms).
+  - ML sanity check verified (ECAPA-TDNN CPU inference score: 0.8668).
+  - **Pending Scope Notice:** Security-event journal instrumentation and React dashboard telemetry integration remain pending future increments.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 154ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 156ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 178ms** |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 186ms** |
+| **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
 | **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
 | **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.08s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
 | **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
@@ -595,18 +637,17 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **251/251 tests PASSED in 5.41s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **266/266 tests PASSED in 6.28s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
 | **Streamlit Smoke Test** | `streamlit.testing.v1.AppTest.from_file('app.py')` | 0 | AppTest initializes, runs with zero exceptions across 4 tabs |
 
-
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Uninstrumented Verification Logging (Current Limitation):**
-   - *Status:* `VerificationEvent` schema, migration, and `VerificationEventRepository` are established, but `POST /verify` does not yet log verification events into the database during live requests. Route instrumentation will be implemented in Increment 3C.3.
+1. **Security Event Logging Uninstrumented (Current Limitation):**
+   - *Status:* `VerificationEvent` schema, repository, and `POST /verify` route logging are now active. However, security event logging (e.g. rate limit exhaustion, unauthorized access attempts, tampering) and dashboard telemetry queries remain to be instrumented.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
@@ -623,11 +664,10 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3C.3: Verification Route Event Journal Instrumentation**:
-1. Wire `VerificationEventRepository` into `POST /verify` (`app/api/routes_verification.py`).
-2. Record persistent verification events for `verified`, `rejected`, `challenge_failed`, `unauthorized`, and `error` outcomes within the caller's transaction.
-3. Verify fail-closed semantics and test coverage across web and device verification flows.
-4. Keep React dashboard integration separated into Increment 3C.4.
+Proceed to **Increment 3C.4: Connect Overview Dashboard Telemetry to Real Verification Events**:
+1. Add backend metrics endpoints (`GET /telemetry/verification-summary`, `GET /telemetry/recent-activity`) utilizing `VerificationEventRepository.count_by_outcome()` and `list_events()`.
+2. Connect the React Overview dashboard verification success rate, total verifications, and recent activity feed to the live backend data.
+3. Keep security events uninstrumented until dedicated security event schema is designed.
 
 
 

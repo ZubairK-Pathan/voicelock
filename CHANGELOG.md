@@ -10,6 +10,17 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3C.3: Persist Verification Outcomes**
+  - Integrated `VerificationEventRepository` with `POST /verify` in `app/api/routes_verification.py` to record real verification outcomes (`verified`, `rejected`, `challenge_failed`, `error`) into `verification_events`.
+  - Implemented strict lifecycle boundary separation: requests rejected before challenge consumption (401 unauthenticated, 429 rate limit, 403 unauthorized, 404 unregistered speaker, 400 invalid/expired challenge) do not create verification events.
+  - Implemented fail-closed transaction policy for `VERIFIED` outcomes: if `db.commit()` fails during audit logging, the session is rolled back and raises HTTP 500, guaranteeing physical or logical access (`action="UNLOCK"`) cannot be granted without a durable audit record.
+  - Implemented non-masking transaction policy for `REJECTED`, `CHALLENGE_FAILED`, and `ERROR` outcomes: if `db.commit()` fails, the session is rolled back, a warning is logged, and the client's denial/error response is preserved without exposing database internals.
+  - Guaranteed at-most-once attempt recording via `event_recorded` execution flag across all outcome paths and exception blocks.
+  - Attached trustworthy identity attributes: `user_id` from Firebase actor, `device_id` from IoT terminal actor, `verification_flow` (`web` or `device`), validated `speaker_id`, and sanitized `request_id` (propagated from `X-Request-ID` or `X-Correlation-ID` up to 64 characters).
+  - Maintained strict data minimization: zero persistence of raw audio, audio filepaths, embeddings, similarity scores, passwords, or bearer tokens.
+  - Added comprehensive test suite in `tests/test_verification_route_audit.py` (15 tests).
+  - Total automated backend test suite expanded from 251 to **266 tests passing in 6.28s**.
+  - Documented that security event logging and dashboard telemetry integration are still pending.
 - **Increment 3C.2: Verification Event Repository**
   - Implemented `VerificationEventRepository` in `app/repositories/verification_event_repository.py` for persistent `VerificationEvent` query execution and aggregation.
   - Adhered strictly to caller-controlled transaction conventions: repository methods flush without calling `commit()` or `rollback()`.

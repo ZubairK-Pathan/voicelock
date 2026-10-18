@@ -22,6 +22,8 @@ from app.core.config import SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES
 from app.core.auth import AuthenticatedUser, get_current_user, get_current_admin, authenticate_ws_admin
 from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
 from app.db.session import get_db, get_db_context
+from app.db.base import VerificationEvent, VerificationOutcome
+from app.repositories.verification_event_repository import VerificationEventRepository
 from app.core.rate_limit import (
     _verify_limiter,
     _identify_limiter,
@@ -73,6 +75,10 @@ def _get_predict_speaker():
 
 def _get_verify_speaker():
     mod = sys.modules.get("cloud_api")
+    if mod and hasattr(mod, "verify_speaker") and _is_mocked(mod.verify_speaker):
+        return mod.verify_speaker
+    if _is_mocked(predict.verify_speaker):
+        return predict.verify_speaker
     if mod and hasattr(mod, "verify_speaker"):
         return mod.verify_speaker
     return predict.verify_speaker
@@ -80,6 +86,10 @@ def _get_verify_speaker():
 
 def _get_run_liveness_check():
     mod = sys.modules.get("cloud_api")
+    if mod and hasattr(mod, "run_liveness_check") and _is_mocked(mod.run_liveness_check):
+        return mod.run_liveness_check
+    if _is_mocked(liveness.run_liveness_check):
+        return liveness.run_liveness_check
     if mod and hasattr(mod, "run_liveness_check"):
         return mod.run_liveness_check
     return liveness.run_liveness_check
@@ -159,6 +169,84 @@ async def identify(
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+def _record_verification_event(
+    db: Session,
+    outcome: VerificationOutcome,
+    actor: Union[AuthenticatedUser, AuthenticatedDevice],
+    speaker_id: Optional[str],
+    request: Optional[Request] = None,
+) -> Optional[VerificationEvent]:
+    """
+    Persist a verification event using VerificationEventRepository.
+    
+    Identity Mapping:
+    - user_id: actor.uid if AuthenticatedUser else None
+    - device_id: actor.device_id if AuthenticatedDevice else None
+    - verification_flow: "device" if AuthenticatedDevice else "web"
+    - speaker_id: clean speaker identifier (verified and authorized)
+    - request_id: extracted safely from X-Request-ID or X-Correlation-ID header if present
+    
+    Failure Policy:
+    - VERIFIED: Fails closed. If commit fails, rolls back and raises HTTPException(500)
+      to prevent unlocking access (UNLOCK) when audit durability cannot be guaranteed.
+    - REJECTED / CHALLENGE_FAILED: Rolls back and logs a warning; does not replace the
+      denial HTTP response with an error.
+    - ERROR: Rolls back and logs a warning; preserves the underlying processing error.
+    """
+    clean_user_id = actor.uid if isinstance(actor, AuthenticatedUser) else None
+    clean_device_id = actor.device_id if isinstance(actor, AuthenticatedDevice) else None
+    flow = "device" if isinstance(actor, AuthenticatedDevice) else "web"
+
+    clean_request_id = None
+    if request is not None:
+        raw_req_id = request.headers.get("X-Request-ID") or request.headers.get("X-Correlation-ID")
+        if raw_req_id and raw_req_id.strip():
+            clean_request_id = raw_req_id.strip()[:64]
+
+    repo = VerificationEventRepository(db)
+
+    if outcome == VerificationOutcome.VERIFIED:
+        try:
+            event = repo.create_event(
+                outcome=outcome,
+                verification_flow=flow,
+                user_id=clean_user_id,
+                speaker_id=speaker_id,
+                device_id=clean_device_id,
+                request_id=clean_request_id,
+            )
+            db.commit()
+            return event
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Database failure committing verification event for VERIFIED outcome: %s", exc)
+            raise HTTPException(
+                status_code=500,
+                detail="Database failure recording verification audit trail.",
+            ) from exc
+
+    # Non-verified outcomes (REJECTED, CHALLENGE_FAILED, ERROR):
+    try:
+        event = repo.create_event(
+            outcome=outcome,
+            verification_flow=flow,
+            user_id=clean_user_id,
+            speaker_id=speaker_id,
+            device_id=clean_device_id,
+            request_id=clean_request_id,
+        )
+        db.commit()
+        return event
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Database failure persisting verification event for outcome '%s': %s",
+            outcome.value if isinstance(outcome, VerificationOutcome) else outcome,
+            exc,
+        )
+        return None
 
 
 @router.post("/verify")
@@ -260,6 +348,7 @@ async def verify(
 
     # 3. Save upload and enforce upload limits
     tmp_path = None
+    event_recorded = False
     try:
         save_fn = _get_save_upload()
         tmp_path = save_fn(audio, request=request)
@@ -269,6 +358,14 @@ async def verify(
         is_live, liveness_reason, _ = liveness_fn(str(tmp_path), challenge.digits)
         if not is_live:
             # Liveness failure: Fail closed and deny access without running biometric inference
+            event_recorded = True
+            _record_verification_event(
+                db=db,
+                outcome=VerificationOutcome.CHALLENGE_FAILED,
+                actor=actor,
+                speaker_id=clean_claimed,
+                request=request,
+            )
             return {
                 "accepted": False,
                 "action": "DENY",
@@ -294,6 +391,16 @@ async def verify(
         finally:
             release_inference_slot()
 
+        outcome = VerificationOutcome.VERIFIED if result["is_accepted"] else VerificationOutcome.REJECTED
+        event_recorded = True
+        _record_verification_event(
+            db=db,
+            outcome=outcome,
+            actor=actor,
+            speaker_id=clean_claimed,
+            request=request,
+        )
+
         return {
             "accepted": result["is_accepted"],
             "action": "UNLOCK" if result["is_accepted"] else "DENY",
@@ -305,12 +412,49 @@ async def verify(
     except HTTPException:
         raise
     except (ValueError, sf.LibsndfileError) as err:
+        if not event_recorded:
+            event_recorded = True
+            _record_verification_event(
+                db=db,
+                outcome=VerificationOutcome.ERROR,
+                actor=actor,
+                speaker_id=clean_claimed,
+                request=request,
+            )
         raise HTTPException(status_code=400, detail=f"Invalid or unreadable audio content: {err}")
     except RuntimeError as re:
         err_msg = str(re).lower()
         if "ffmpeg" in err_msg or "conversion failed" in err_msg:
+            if not event_recorded:
+                event_recorded = True
+                _record_verification_event(
+                    db=db,
+                    outcome=VerificationOutcome.ERROR,
+                    actor=actor,
+                    speaker_id=clean_claimed,
+                    request=request,
+                )
             raise HTTPException(status_code=400, detail="Invalid audio stream or unreadable format.")
+        if not event_recorded:
+            event_recorded = True
+            _record_verification_event(
+                db=db,
+                outcome=VerificationOutcome.ERROR,
+                actor=actor,
+                speaker_id=clean_claimed,
+                request=request,
+            )
+        raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
     except Exception as exc:
+        if not event_recorded:
+            event_recorded = True
+            _record_verification_event(
+                db=db,
+                outcome=VerificationOutcome.ERROR,
+                actor=actor,
+                speaker_id=clean_claimed,
+                request=request,
+            )
         logger.exception("Biometric verification inference failed: %s", exc)
         raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
     finally:
