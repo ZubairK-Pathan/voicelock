@@ -10,6 +10,18 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4B: Neon PostgreSQL Setup & Cloud Database Validation**
+  - Configured Neon as the PostgreSQL cloud database provider for VoiceLock Enterprise using official Neon agent skills and Neon CLI (v8.8.0).
+  - Configured project-level Neon MCP server for Antigravity via OAuth without storing long-lived API keys in the repository.
+  - Linked project `sweet-block-01674817` (`org-proud-feather-80065126`), branch `production` (`br-withered-tree-b5mlkkc3`) in region `aws-us-east-2`.
+  - Initialized `neon.ts` infrastructure-as-code configuration declaring Lakebase Postgres with auto-expiring dev branches.
+  - Deployed configuration with `neon deploy` and pulled pooled (`DATABASE_URL`) and direct (`DATABASE_URL_UNPOOLED`) connection strings into `.env.local`.
+  - Added `.neon` to `.gitignore` and `.dockerignore` to prevent leaking context metadata.
+  - Enhanced `app/core/config.py` with `load_env_files()` for zero-dependency loading of local `.env` and `.env.local` files, skipping automatic loading during `pytest` runs to preserve fast and isolated local testing.
+  - Enhanced `app/db/session.py` with `get_migration_url()` prioritizing unpooled direct connection (`DATABASE_URL_UNPOOLED`) for migrations to prevent PgBouncer transaction-mode state and prepared statement issues.
+  - Applied all 7 Alembic migrations cleanly to live Neon PostgreSQL (`ea5fe481812c (head)`), creating tables: `alembic_version`, `schema_initializations`, `speakers`, `user_speaker_mappings`, `devices`, `verification_events`, and `security_events`.
+  - Verified live TLS PostgreSQL connection, verified schema, queried repositories, and confirmed live Uvicorn HTTP server response (`GET /`).
+  - Added automated test suite in `tests/test_neon_database.py` (6 tests). Total automated backend test suite expanded from 290 to **296 tests passing in 14.52s**.
 - **Increment 4A: Production Containerization & Cloud Build Baseline**
   - Added verified missing production dependency `firebase-admin>=7.0.0` to `requirements.txt`.
   - Created production `Dockerfile` (Python 3.11-slim, non-root execution as `voicelock`, `ffmpeg` and `libsndfile1` system packages, automated model cache pre-warming, container healthcheck probing `GET /`).

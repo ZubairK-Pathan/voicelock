@@ -9,6 +9,37 @@ from predict import DEFAULT_THRESHOLD
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
+def load_env_files() -> None:
+    """
+    Load environment variables from local .env and .env.local files if present,
+    without overwriting variables already explicitly set in os.environ.
+    During automated unit test runs (e.g. pytest), automatic file loading is skipped
+    to ensure test suites remain isolated and do not mutate remote databases.
+    """
+    import sys
+    if "pytest" in sys.modules or os.getenv("VOICELOCK_ENV") == "testing":
+        return
+
+    for fname in (".env", ".env.local"):
+        env_path = BASE_DIR / fname
+        if env_path.is_file():
+            try:
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip().strip("'\"")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+            except Exception:
+                pass
+
+
+load_env_files()
+
+
 def load_server_threshold() -> float:
     """
     Load and validate the server-side acceptance threshold.

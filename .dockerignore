@@ -50,6 +50,8 @@ frontend/
 
 # Developer tooling & OS metadata
 .gemini/
+.neon
 .DS_Store
 *.swp
 *~
+

@@ -50,10 +50,11 @@ fine_tuned_model/
 *.sqlite
 *.sqlite3
 
-# IDE / Editor
+# IDE / Editor & Tooling
 .vscode/
 .idea/
 .agents/
+.neon
 
 # Secrets & Credentials
 firebase-credentials.json

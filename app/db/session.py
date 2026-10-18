@@ -85,6 +85,19 @@ def get_database_url() -> str:
     return "sqlite:///./voicelock.db"
 
 
+def get_migration_url() -> str:
+    """
+    Resolve database URL for schema migrations.
+    Prioritizes direct unpooled connection (DATABASE_URL_UNPOOLED) over pooled connection
+    to prevent PgBouncer transaction-mode state, prepared statement leaks, and catalog lock issues.
+    Falls back to get_database_url().
+    """
+    unpooled = os.getenv("DATABASE_URL_UNPOOLED", "").strip()
+    if unpooled:
+        return normalize_database_url(unpooled)
+    return get_database_url()
+
+
 def create_db_engine(database_url: Optional[str] = None) -> Engine:
     """
     Create a configured SQLAlchemy 2.0 engine with connection pooling.

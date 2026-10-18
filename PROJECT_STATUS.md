@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 4A — Production Containerization & Cloud Build Baseline (Completed)  
+**Current Milestone:** Increment 4B — Neon PostgreSQL Setup & Cloud Database Validation (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Production Dockerfile, .dockerignore, model pre-warming, and 290 backend automated tests passing in 6.86s, 31 frontend unit/integration tests passing in 162ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Neon PostgreSQL connected and migrated to head `ea5fe481812c`, dual pooled/unpooled URL routing, 296 backend automated tests passing in 14.52s, 31 frontend unit/integration tests passing in 162ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 4A establishes the production containerization and packaging baseline for VoiceLock Enterprise. The missing production dependency `firebase-admin>=7.0.0` was verified and added to `requirements.txt`. A minimal, hardened `Dockerfile` (Python 3.11-slim) was created enforcing unprivileged non-root execution (`voicelock` user, UID 10001), OS-level `ffmpeg` and `libsndfile1` installation for audio normalization, automated model cache pre-warming via `scripts/warmup_models.py` (pre-baking SpeechBrain ECAPA-TDNN and Vosk STT models into `/app/.model_cache/`), and container health checking probing `GET /`. A strict `.dockerignore` file prevents leakage of secrets (`firebase-credentials*.json`, `.env*`), biometric audio datasets (`processed_dataset/`, `recordings/`, `*.wav`), local databases, virtual environments, and developer machine symlinks. Dedicated automated test suite in `tests/test_containerization.py` verified all containerization and security invariants. Automated backend tests expanded to **290 tests passing in 6.86s** with zero regressions.
+Increment 4B establishes Neon as the managed Lakebase PostgreSQL provider for VoiceLock Enterprise, preparing the database foundation for backend containerization and Azure deployment. The official Neon agent skills and Neon CLI (v8.8.0) were configured with OAuth MCP integration for Antigravity without storing long-lived API keys. The existing Neon project `sweet-block-01674817` (`org-proud-feather-80065126`) on branch `production` (`br-withered-tree-b5mlkkc3`) in region `aws-us-east-2` was linked and initialized with `neon.ts` declaring Lakebase Postgres. Dual endpoints were configured: pooled (`DATABASE_URL`) for FastAPI application queries and direct unpooled (`DATABASE_URL_UNPOOLED`) for Alembic schema migrations. All 7 Alembic migrations were successfully applied to the clean Neon database, verifying 100% PostgreSQL DDL compatibility for speakers, devices, user mappings, verification events, and security events. Live TLS connectivity and repository operations were verified end-to-end. Automated backend tests expanded to **296 tests passing in 14.52s** with zero regressions.
 
 
 ---
@@ -779,14 +779,44 @@ Increment 4A establishes the production containerization and packaging baseline 
   - Model warmup script verified locally (`scripts/warmup_models.py` exited with 0).
   - Note: Docker daemon is currently offline on local macOS developer host; local image build remains unverified until Docker Desktop is started or built via GitHub Actions runner.
 
+### Increment 4B: Neon PostgreSQL Setup & Cloud Database Validation (Completed)
+- **Neon Platform & CLI Integration:**
+  - Configured project-level Neon MCP server for Antigravity using OAuth URL `https://mcp.neon.tech/mcp` without long-lived API keys.
+  - Installed official Neon agent skills: `neon`, `neon-postgres`, `neon-ai-gateway`, `neon-functions`, `neon-object-storage`, `neon-postgres-branches`, `neon-postgres-egress-optimizer`, `neon-realtime`.
+  - Linked to existing Neon project `sweet-block-01674817` (`org-proud-feather-80065126`), branch `production` (`br-withered-tree-b5mlkkc3`), AWS region `aws-us-east-2`.
+  - Initialized `neon.ts` declaring `postgres` service and non-default branch auto-expiration policy.
+  - Ran `neon deploy` successfully, pulling `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct) into `.env.local`.
+- **Database Routing & Connection Practices:**
+  - Added `.neon` to `.gitignore` and `.dockerignore`.
+  - Enhanced `app/core/config.py` with zero-dependency `load_env_files()` to automatically load local `.env` and `.env.local` files without overwriting existing environment variables, while skipping automatic loading during `pytest` runs to keep test execution completely local, isolated, and fast.
+  - Enhanced `app/db/session.py` with `get_migration_url()` prioritizing unpooled direct connections (`DATABASE_URL_UNPOOLED`) for Alembic migrations, preventing PgBouncer transaction-mode state, prepared statement leaks, and catalog lock issues.
+  - Updated `alembic/env.py` to utilize `get_migration_url()`.
+- **Live Schema Migration & Verification:**
+  - Successfully executed all 7 Alembic migrations on live Neon PostgreSQL (`ea5fe481812c (head)`), creating tables:
+    `alembic_version`, `schema_initializations`, `speakers`, `user_speaker_mappings`, `devices`, `verification_events`, `security_events`.
+  - Verified live end-to-end repository queries over TLS (`SpeakerRepository`, `DeviceRepository`, `VerificationEventRepository`).
+  - Verified live production-like Uvicorn server serving `GET /` returning `status: "online"`.
+- **Automated Test Suite:**
+  - Created `tests/test_neon_database.py` with 6 automated tests:
+    - `test_neon_url_normalization`: dialect prefix normalization.
+    - `test_neon_url_masking`: credential redaction.
+    - `test_env_loading_preserves_existing_environment`: non-overwrite guarantee.
+    - `test_migration_url_prioritizes_unpooled_connection`: unpooled migration routing.
+    - `test_all_seven_alembic_migrations_present`: complete unbroken migration chain.
+    - `test_live_neon_postgresql_connectivity`: live TLS connection, schema verification, and repository querying.
+- **Biometric Privacy & Seeding Architecture Plan:**
+  - Real speaker biometric profiles (`speaker_profiles/profiles.pkl`) were NOT uploaded or seeded into the remote database in this increment.
+  - *Safe Seeding Plan:* A dedicated admin CLI script (`scripts/seed_remote_speakers.py`) will be executed by an authorized human operator with direct database access. The script will read local profiles, validate 192-d vectors, and insert records directly over encrypted TLS without ever committing profiles, keys, or audio to Git.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **31/31 tests PASSED in 157ms** (Bearer token attachment, real speaker/device/verification metrics loading, empty database zero-handling, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **31/31 tests PASSED in 162ms** (Bearer token attachment, real speaker/device/verification metrics loading, empty database zero-handling, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 180ms** |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 194ms** |
+| **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
 | **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
@@ -797,7 +827,9 @@ Increment 4A establishes the production containerization and packaging baseline 
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **290/290 tests PASSED in 6.86s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **296/296 tests PASSED in 14.52s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database) |
+| **Live Neon PostgreSQL Connectivity** | Direct SQLAlchemy 2.0 + psycopg 3 TLS query | 0 | Connected to `neondb` on PostgreSQL 18.6 in `aws-us-east-2`, verified all 7 tables, queried repositories |
+| **Live Uvicorn Server Smoke Test** | `uvicorn app.main:app` + HTTP probe `GET /` | 0 | HTTP 200 OK, `status: "online"`, `version: "1.0.0"` |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -807,7 +839,7 @@ Increment 4A establishes the production containerization and packaging baseline 
 
 ## 4. Known Issues & Remaining Security Risks
 1. **Security Event Logging Uninstrumented (Current Limitation):**
-   - *Status:* `SecurityEvent` schema and Alembic migration are now established in Increment 3D.1. However, security event repository, API routes, route instrumentation (e.g. rate limit exhaustion, unauthorized access attempts, tampering), and frontend integration remain to be implemented.
+   - *Status:* `SecurityEvent` schema and Alembic migration are established. However, security event repository, API routes, route instrumentation (e.g. rate limit exhaustion, unauthorized access attempts, tampering), and frontend integration remain to be implemented.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
@@ -824,10 +856,11 @@ Increment 4A establishes the production containerization and packaging baseline 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 4B: Cloud CI/CD Automation (GitHub Actions to GHCR)**:
-1. Create `.github/workflows/deploy.yml` to automatically build, test, and push the backend container image to `ghcr.io/zubairk-pathan/voicelock-backend:latest` on push to `feature/enterprise-foundation`.
-2. Configure GitHub Actions secrets for Azure Container Apps and Azure Static Web Apps deployment.
-3. Keep cloud resource provisioning gated behind explicit operator approval.
+Proceed to **Increment 4C: Cloud CI/CD Automation (GitHub Actions to GHCR & Azure Deployment)**:
+1. Create `.github/workflows/deploy.yml` to automatically build, test, and push the backend container image to GitHub Container Registry (`ghcr.io`).
+2. Configure Azure Container Apps secret references for `DATABASE_URL` and Firebase credentials.
+3. Configure Azure Static Web Apps deployment for the React frontend.
+
 
 
 
