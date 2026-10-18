@@ -3,9 +3,10 @@ app/db/base.py — SQLAlchemy 2.0 Declarative Base and foundational migration en
 """
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -153,6 +154,132 @@ class DeviceRecord(Base):
     @property
     def is_active(self) -> bool:
         return self.status == "active"
+
+
+class VerificationOutcome(str, Enum):
+    """
+    Bounded outcome categories for biometric verification attempts.
+    Mapped directly from verification service execution paths:
+    - VERIFIED: Biometric similarity >= threshold AND spoken liveness passed (UNLOCK)
+    - REJECTED: Spoken liveness passed, but biometric similarity < threshold (DENY)
+    - CHALLENGE_FAILED: Spoken digit liveness check failed (wrong digits, silence, timeout, or reused challenge)
+    - UNAUTHORIZED: Caller not authorized to claim target speaker identity (RBAC violation)
+    - ERROR: Malformed audio format, decoding error, or processing exception
+    """
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+    CHALLENGE_FAILED = "challenge_failed"
+    UNAUTHORIZED = "unauthorized"
+    ERROR = "error"
+
+
+VALID_VERIFICATION_OUTCOMES = frozenset(item.value for item in VerificationOutcome)
+VALID_VERIFICATION_FLOWS = frozenset({"web", "device"})
+
+
+class VerificationEvent(Base):
+    """
+    Durable verification event audit journal entity.
+    Records transactional verification attempts, outcomes, and audit telemetry
+    without persisting biometric audio, embeddings, similarity scores, or credentials.
+
+    Privacy & Retention Semantics:
+    1. Zero Biometric Storage: Raw audio, audio file paths, 192-d embeddings,
+       and similarity scores are strictly excluded from persistence.
+    2. Zero Credential Storage: Passwords, bearer tokens, and device secrets are strictly excluded.
+    3. Audit History Preservation: When a speaker or device is deleted from its registry table,
+       the associated historical verification event is retained with foreign keys set to NULL
+       (ondelete="SET NULL"), ensuring audit compliance while scrubbing orphaned PII.
+    4. Identity Decoupling: user_id records the authenticated Firebase UID (external auth);
+       speaker_id references the claimed enrolled voiceprint; device_id references the physical terminal.
+    """
+    __tablename__ = "verification_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    outcome: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        index=True,
+    )
+    verification_flow: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="web",
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+    speaker_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("speakers.speaker_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("devices.device_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    request_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('verified', 'rejected', 'challenge_failed', 'unauthorized', 'error')",
+            name="ck_verification_events_outcome",
+        ),
+        CheckConstraint(
+            "verification_flow IN ('web', 'device')",
+            name="ck_verification_events_flow",
+        ),
+        Index("ix_verification_events_created_outcome", "created_at", "outcome"),
+    )
+
+    # Relationships for ORM traversal
+    speaker: Mapped[Optional["SpeakerRecord"]] = relationship(
+        "SpeakerRecord",
+        backref="verification_events",
+        passive_deletes=True,
+    )
+    device: Mapped[Optional["DeviceRecord"]] = relationship(
+        "DeviceRecord",
+        backref="verification_events",
+        passive_deletes=True,
+    )
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("verification_flow", "web")
+        if "created_at" not in kwargs:
+            kwargs["created_at"] = datetime.now(timezone.utc)
+        super().__init__(**kwargs)
+
+    @validates("outcome")
+    def validate_outcome(self, key: str, value: str) -> str:
+        if not value or value not in VALID_VERIFICATION_OUTCOMES:
+            raise ValueError(
+                f"Invalid verification outcome '{value}'. Must be one of {sorted(VALID_VERIFICATION_OUTCOMES)}."
+            )
+        return value
+
+    @validates("verification_flow")
+    def validate_flow(self, key: str, value: str) -> str:
+        if not value or value not in VALID_VERIFICATION_FLOWS:
+            raise ValueError(
+                f"Invalid verification flow '{value}'. Must be one of {sorted(VALID_VERIFICATION_FLOWS)}."
+            )
+        return value
 
 
 

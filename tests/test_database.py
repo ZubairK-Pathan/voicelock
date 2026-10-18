@@ -11,6 +11,7 @@ Verifies:
 7. Existing application startup and imports remain completely independent of live database infrastructure.
 """
 
+from datetime import datetime, timezone
 import os
 import tempfile
 from pathlib import Path
@@ -24,7 +25,17 @@ from sqlalchemy.pool import StaticPool, QueuePool
 from alembic.config import Config
 from alembic import command
 
-from app.db.base import Base, SchemaInitialization, SpeakerRecord, UserSpeakerMapping, DeviceRecord
+from app.db.base import (
+    Base,
+    SchemaInitialization,
+    SpeakerRecord,
+    UserSpeakerMapping,
+    DeviceRecord,
+    VerificationOutcome,
+    VALID_VERIFICATION_OUTCOMES,
+    VALID_VERIFICATION_FLOWS,
+    VerificationEvent,
+)
 from app.db.session import (
     get_database_url,
     normalize_database_url,
@@ -208,6 +219,8 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         assert "schema_initializations" in tables
         assert "speakers" in tables
         assert "user_speaker_mappings" in tables
+        assert "devices" in tables
+        assert "verification_events" in tables
         assert "alembic_version" in tables
 
         # Step 2: Verify table operations
@@ -231,6 +244,8 @@ def test_alembic_upgrade_and_downgrade_disposable_sqlite_db():
         assert "schema_initializations" not in tables_post
         assert "speakers" not in tables_post
         assert "user_speaker_mappings" not in tables_post
+        assert "devices" not in tables_post
+        assert "verification_events" not in tables_post
         engine_post.dispose()
 
     finally:
@@ -640,7 +655,320 @@ def test_speakers_embedding_schema_migration(monkeypatch):
                 pass
 
 
-# ─── 6. Application Startup & Import Decoupling ────────────────────────────────
+# ─── 6. Verification Event Schema & Migration Tests (Increment 3C.1) ───────────
+
+def test_verification_event_model_creation_and_attributes():
+    """
+    Verify VerificationEvent entity defaults, UTC timestamps, bounded outcome enums,
+    and optional identity fields (user_id, speaker_id, device_id, request_id).
+    """
+    # 1. Minimal instantiation with defaults
+    event = VerificationEvent(outcome="verified")
+    assert event.outcome == "verified"
+    assert event.verification_flow == "web"
+    assert event.created_at is not None
+    assert event.created_at.tzinfo == timezone.utc
+    assert event.user_id is None
+    assert event.speaker_id is None
+    assert event.device_id is None
+    assert event.request_id is None
+
+    # 2. Instantiation with Enum and all optional fields
+    event_device = VerificationEvent(
+        outcome=VerificationOutcome.REJECTED,
+        verification_flow="device",
+        user_id=None,
+        speaker_id="Zubair",
+        device_id="esp32-door-portal-01",
+        request_id="req-test-uuid-999",
+    )
+    assert event_device.outcome == "rejected"
+    assert event_device.verification_flow == "device"
+    assert event_device.speaker_id == "Zubair"
+    assert event_device.device_id == "esp32-door-portal-01"
+    assert event_device.request_id == "req-test-uuid-999"
+
+    # 3. Verify all outcome enums map to VALID_VERIFICATION_OUTCOMES
+    expected_outcomes = {"verified", "rejected", "challenge_failed", "unauthorized", "error"}
+    assert VALID_VERIFICATION_OUTCOMES == expected_outcomes
+    for outcome in VerificationOutcome:
+        assert outcome.value in expected_outcomes
+        ev = VerificationEvent(outcome=outcome)
+        assert ev.outcome == outcome.value
+
+
+def test_verification_event_outcome_and_flow_validation():
+    """
+    Verify validates decorators enforce strict bounded outcomes and flows,
+    rejecting arbitrary, unrecognized, or empty values.
+    """
+    # Invalid outcomes must raise ValueError
+    invalid_outcomes = ["success", "granted", "denied", "failure", "unknown", "", None]
+    for invalid in invalid_outcomes:
+        with pytest.raises(ValueError, match="Invalid verification outcome"):
+            VerificationEvent(outcome=invalid)
+
+    # Invalid flows must raise ValueError
+    invalid_flows = ["mobile", "api", "cli", "desktop", "", None]
+    for invalid in invalid_flows:
+        with pytest.raises(ValueError, match="Invalid verification flow"):
+            VerificationEvent(outcome="verified", verification_flow=invalid)
+
+
+def test_verification_events_schema_migration_and_constraints(monkeypatch):
+    """
+    Verify verification_events table creation via Alembic, schema metadata (columns,
+    composite and single indexes, foreign keys), ORM query execution, and single-revision
+    rollback (d0199d309a47 -> 8046c184216a).
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Migrate to head (runs all migrations including create_verification_events_table)
+        command.upgrade(alembic_cfg, "head")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "verification_events" in tables
+        assert "speakers" in tables
+        assert "devices" in tables
+
+        # 2. Verify column definitions
+        columns = {col["name"]: col for col in inspector.get_columns("verification_events")}
+        assert "id" in columns
+        assert "created_at" in columns
+        assert "outcome" in columns
+        assert "verification_flow" in columns
+        assert "user_id" in columns
+        assert "speaker_id" in columns
+        assert "device_id" in columns
+        assert "request_id" in columns
+
+        # 3. Verify indexes (single-column and composite)
+        indexes = {idx["name"]: idx for idx in inspector.get_indexes("verification_events")}
+        assert "ix_verification_events_created_at" in indexes
+        assert "ix_verification_events_outcome" in indexes
+        assert "ix_verification_events_created_outcome" in indexes
+        assert indexes["ix_verification_events_created_outcome"]["column_names"] == ["created_at", "outcome"]
+        assert "ix_verification_events_user_id" in indexes
+        assert "ix_verification_events_speaker_id" in indexes
+        assert "ix_verification_events_device_id" in indexes
+        assert "ix_verification_events_request_id" in indexes
+
+        # 4. Verify foreign key definitions
+        fks = inspector.get_foreign_keys("verification_events")
+        referred_tables = {fk["referred_table"]: fk for fk in fks}
+        assert "speakers" in referred_tables
+        assert "devices" in referred_tables
+        assert referred_tables["speakers"]["referred_columns"] == ["speaker_id"]
+        assert referred_tables["devices"]["referred_columns"] == ["device_id"]
+        engine.dispose()
+
+        # 5. Insert diverse verification events across all outcomes and flows
+        with get_db_context() as session:
+            speaker = SpeakerRecord(speaker_id="Zubair", full_name="Zubair K. Pathan")
+            device = DeviceRecord(device_id="esp32-door-portal-01", name="Gate 1", secret_hash="hash")
+            session.add_all([speaker, device])
+            session.flush()
+
+            events = [
+                VerificationEvent(
+                    outcome=VerificationOutcome.VERIFIED,
+                    verification_flow="web",
+                    user_id="firebase_user_1",
+                    speaker_id="Zubair",
+                    request_id="req-101",
+                ),
+                VerificationEvent(
+                    outcome=VerificationOutcome.REJECTED,
+                    verification_flow="device",
+                    speaker_id="Zubair",
+                    device_id="esp32-door-portal-01",
+                    request_id="req-102",
+                ),
+                VerificationEvent(
+                    outcome=VerificationOutcome.CHALLENGE_FAILED,
+                    verification_flow="web",
+                    user_id="firebase_user_2",
+                    request_id="req-103",
+                ),
+                VerificationEvent(
+                    outcome=VerificationOutcome.UNAUTHORIZED,
+                    verification_flow="web",
+                    user_id="firebase_user_3",
+                    speaker_id="Zubair",
+                    request_id="req-104",
+                ),
+                VerificationEvent(
+                    outcome=VerificationOutcome.ERROR,
+                    verification_flow="device",
+                    device_id="esp32-door-portal-01",
+                    request_id="req-105",
+                ),
+            ]
+            session.add_all(events)
+
+        # 6. Query back using composite time-window index and single filters
+        with get_db_context() as session:
+            all_events = session.scalars(select(VerificationEvent)).all()
+            assert len(all_events) == 5
+
+            # Filter by outcome
+            verified_events = session.scalars(
+                select(VerificationEvent).where(VerificationEvent.outcome == "verified")
+            ).all()
+            assert len(verified_events) == 1
+            assert verified_events[0].user_id == "firebase_user_1"
+            assert verified_events[0].speaker_id == "Zubair"
+
+            # Filter by composite (created_at + outcome)
+            now_utc = datetime.now(timezone.utc)
+            recent_rejections = session.scalars(
+                select(VerificationEvent).where(
+                    VerificationEvent.created_at <= now_utc,
+                    VerificationEvent.outcome == "rejected",
+                )
+            ).all()
+            assert len(recent_rejections) == 1
+            assert recent_rejections[0].device_id == "esp32-door-portal-01"
+
+            # Filter by device_id
+            device_events = session.scalars(
+                select(VerificationEvent).where(
+                    VerificationEvent.device_id == "esp32-door-portal-01"
+                )
+            ).all()
+            assert len(device_events) == 2
+
+        reset_engine()
+
+        # 7. Single-revision rollback (d0199d309a47 -> 8046c184216a)
+        command.downgrade(alembic_cfg, "8046c184216a")
+
+        engine_rb = create_db_engine(disposable_url)
+        inspector_rb = inspect(engine_rb)
+        tables_rb = inspector_rb.get_table_names()
+        assert "verification_events" not in tables_rb
+        # Prior tables must remain untouched
+        assert "speakers" in tables_rb
+        assert "devices" in tables_rb
+        assert "user_speaker_mappings" in tables_rb
+        assert "schema_initializations" in tables_rb
+        engine_rb.dispose()
+
+        # 8. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        tables_reup = inspect(engine_reup).get_table_names()
+        assert "verification_events" in tables_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+def test_verification_events_foreign_key_set_null_on_delete(monkeypatch):
+    """
+    Verify ondelete='SET NULL' semantics: When a speaker or device is deleted,
+    associated historical verification audit records are strictly retained with
+    their speaker_id or device_id set to NULL, preserving the audit trail without
+    retaining unnecessary foreign references.
+    """
+    from sqlalchemy import event
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        command.upgrade(alembic_cfg, "head")
+
+        # Enable SQLite foreign key pragma on connection to verify database-level cascades/set-null
+        engine = get_engine()
+        @event.listens_for(engine, "connect")
+        def enable_sqlite_fks(dbapi_con, con_record):
+            cursor = dbapi_con.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        # 1. Create speaker, device, and verification event
+        with get_db_context() as session:
+            speaker = SpeakerRecord(speaker_id="AuditSpeaker", full_name="Audit Candidate")
+            device = DeviceRecord(device_id="audit-terminal-01", name="Audit Terminal", secret_hash="hash")
+            session.add_all([speaker, device])
+            session.flush()
+
+            event_record = VerificationEvent(
+                outcome=VerificationOutcome.VERIFIED,
+                verification_flow="device",
+                user_id="firebase_audit_user",
+                speaker_id="AuditSpeaker",
+                device_id="audit-terminal-01",
+                request_id="req-audit-preserve-1",
+            )
+            session.add(event_record)
+
+        # 2. Delete the speaker record
+        with get_db_context() as session:
+            spk = session.scalar(select(SpeakerRecord).where(SpeakerRecord.speaker_id == "AuditSpeaker"))
+            assert spk is not None
+            session.delete(spk)
+
+        # 3. Delete the device record
+        with get_db_context() as session:
+            dev = session.scalar(select(DeviceRecord).where(DeviceRecord.device_id == "audit-terminal-01"))
+            assert dev is not None
+            session.delete(dev)
+
+        # 4. Verify verification event is preserved with foreign keys set to NULL
+        with get_db_context() as session:
+            ev = session.scalar(
+                select(VerificationEvent).where(
+                    VerificationEvent.request_id == "req-audit-preserve-1"
+                )
+            )
+            assert ev is not None, "Verification event must NOT be deleted when speaker or device is deleted"
+            assert ev.speaker_id is None, "speaker_id must be SET NULL upon speaker deletion"
+            assert ev.device_id is None, "device_id must be SET NULL upon device deletion"
+            assert ev.outcome == "verified"
+            assert ev.verification_flow == "device"
+            assert ev.user_id == "firebase_audit_user"
+            assert ev.created_at is not None
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+# ─── 7. Application Startup & Import Decoupling ────────────────────────────────
 
 def test_application_startup_without_live_database():
     """

@@ -10,6 +10,18 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3C.1: Persistent Verification Event Schema**
+  - Designed and created the `VerificationEvent` declarative model in `app/db/base.py` for persistent biometric access event journaling.
+  - Defined `VerificationOutcome` string enumeration mapping bounded execution outcomes directly from `POST /verify`: `verified`, `rejected`, `challenge_failed`, `unauthorized`, and `error`.
+  - Added strict validators for bounded outcomes and verification flows (`web`, `device`).
+  - Added indexes for audit filtering: `created_at`, `outcome`, `user_id`, `speaker_id`, `device_id`, `request_id`, and a composite index `ix_verification_events_created_outcome` for efficient time-windowed dashboard metrics.
+  - Implemented referential integrity with `ondelete="SET NULL"` for `speaker_id` and `device_id`, preserving historical audit records when speakers or devices are deleted.
+  - Guaranteed zero persistence of biometric embeddings, raw audio, audio paths, similarity scores, passwords, bearer tokens, or device credentials.
+  - Created Alembic revision `d0199d309a47` (`alembic/versions/d0199d309a47_create_verification_events_table.py`) with clean upgrade and downgrade operations.
+  - Re-exported models and enums in `app/db/__init__.py` and `app/core/database.py`.
+  - Added 4 tests in `tests/test_database.py` covering model creation, validators, migration upgrade/downgrade, composite indexes, and `ON DELETE SET NULL` retention semantics.
+  - Expanded backend test suite from 234 to **238 tests passing in 5.32s**.
+  - Documented that event recording in route controllers and dashboard integration are deferred to subsequent increments.
 - **Increment 3B: Overview Dashboard Real Backend Metrics Integration**
   - Replaced hardcoded `MOCK_METRICS`, `MOCK_VERIFICATION_RECORDS`, and `MOCK_SECURITY_EVENTS` in `frontend/src/components/pages/OverviewPage.tsx` with live database-backed metrics and honest uninstrumented states.
   - Implemented `app/api/routes_devices.py` (`GET /devices`) with strict administrative RBAC (`get_current_admin`, `check_revoked=True`), providing real access terminal counts (`total`, `active_count`) from `DeviceRepository(db)` while strictly minimizing data (excluding `secret_hash`, raw keys, and credentials).

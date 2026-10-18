@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 3B — Overview Dashboard Real Backend Metrics Integration (Completed)  
+**Current Milestone:** Increment 3C.1 — Persistent Verification Event Schema (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Real database-backed speaker and terminal metrics connected to React Overview dashboard, uninstrumented event streams displayed honestly, 234 backend automated tests passing in 5.31s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Persistent verification event schema and Alembic migration established, 238 backend automated tests passing in 5.32s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3B connects the React `OverviewPage` (`frontend/src/components/pages/OverviewPage.tsx`) and application layout navigation (`App.tsx`, `Sidebar.tsx`) to live backend database metrics, retiring hardcoded mock records (`MOCK_METRICS`, `MOCK_VERIFICATION_RECORDS`, `MOCK_SECURITY_EVENTS`). The dashboard retrieves real speaker enrollment counts from `apiClient.getSpeakers()` and real access terminal counts from a newly implemented administrative endpoint `GET /devices` (`app/api/routes_devices.py`) backed by `DeviceRepository(db)`. The endpoint enforces strict role-based access control (`Role.ADMIN` with `check_revoked=True`) and data minimization, strictly omitting cryptographic hashes (`secret_hash`), credentials, tokens, and biometric vectors. For metrics lacking persisted database models or event logs (Verification Success Rate, Security Incidents, and recent verification history), the dashboard presents honest unavailable states (`—`, "Audit log persistence not initialized", "Biometric Access Journal Uninstrumented") alongside an explicit Security Disclosure Notice clarifying that the absence of logged incidents indicates uninstrumented event storage rather than zero threat activity or verified zero-failure operations. Zero mock data is rendered in production. The automated test suite expanded to **234 backend tests passing in 5.31s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
+Increment 3C.1 establishes the foundational database schema and Alembic migration for persistent biometric verification events (`verification_events` table). The schema introduces the `VerificationEvent` SQLAlchemy 2.x declarative entity and `VerificationOutcome` bounded outcome enumeration directly mapped from verified execution paths in `POST /verify` (`verified`, `rejected`, `challenge_failed`, `unauthorized`, `error`). The model enforces strict bounded verification flows (`web`, `device`), captures timezone-aware UTC timestamps (`created_at`), and associates optional identity context (`user_id`, `speaker_id`, `device_id`, `request_id`). To ensure regulatory and audit compliance, foreign keys to `speakers.speaker_id` and `devices.device_id` utilize `ondelete="SET NULL"`, guaranteeing that when a speaker or device is deleted from its registry table, historical verification audit rows are preserved with foreign references scrubbed. The schema adheres to strict data minimization guarantees: raw audio, audio paths, 192-dimensional embeddings, similarity scores, passwords, bearer tokens, and device secrets are strictly excluded from persistence. Composite indexes (`ix_verification_events_created_outcome`) and single-column indexes are provisioned for future time-windowed metric aggregations. Alembic revision `d0199d309a47` (`down_revision = '8046c184216a'`) provides a fully verified, reversible upgrade and downgrade path. **Note: Verification endpoint logging hooks, event journal recording, and React dashboard telemetry integration are intentionally not implemented in this increment and will be established in subsequent increments (3C.2 and 3C.3).** The automated test suite expanded to **238 backend tests passing in 5.32s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
 
 
 ---
@@ -526,6 +526,31 @@ Increment 3B connects the React `OverviewPage` (`frontend/src/components/pages/O
   - Total frontend automated test suite expanded from 15 to **23 tests passing in 154ms**.
   - Frontend production build (`npm run build`) passed cleanly in 173ms with **0 warnings and 0 errors** on 26 files in `oxlint`.
 
+### Increment 3C.1: Persistent Verification Event Schema (Completed)
+- **Database Model & Enums (`app/db/base.py`, `app/db/__init__.py`, `app/core/database.py`):**
+  - Created `VerificationOutcome` string enumeration defining bounded outcome states directly mapped from verification route execution paths: `verified` (similarity >= threshold + liveness passed), `rejected` (similarity < threshold), `challenge_failed` (spoken digits mismatch/silence/consumed), `unauthorized` (RBAC violation/speaker mismatch), and `error` (audio decode/runtime failure).
+  - Defined `VerificationEvent` declarative model in `app/db/base.py`:
+    - Columns: `id` (PK integer autoincrement), `created_at` (timezone-aware UTC DateTime, indexed), `outcome` (String(32), indexed, check constraint validated), `verification_flow` (String(32), default "web", validated), `user_id` (String(128) nullable, indexed), `speaker_id` (String(64) nullable FK, indexed), `device_id` (String(64) nullable FK, indexed), `request_id` (String(64) nullable, indexed).
+    - Composite index: `ix_verification_events_created_outcome` on `(created_at, outcome)` for efficient time-windowed security dashboard metrics.
+    - Check constraints: `ck_verification_events_outcome` and `ck_verification_events_flow`.
+    - Referential integrity: `speaker_id` and `device_id` foreign keys enforce `ondelete="SET NULL"`, preserving audit trail history while decoupling orphaned entity IDs upon deletion.
+    - Strict data minimization: Zero persistence of raw audio, audio paths, 192-d vectors, similarity scores, passwords, bearer tokens, or device secrets.
+    - Re-exported symbols in `app.db` and `app.core.database`.
+- **Alembic Migration (`alembic/versions/d0199d309a47_create_verification_events_table.py`):**
+  - Chained revision `d0199d309a47` to `down_revision = '8046c184216a'`.
+  - Implemented symmetric `upgrade()` creating `verification_events` table, foreign keys, check constraints, and 7 indexes.
+  - Implemented clean `downgrade()` dropping all indexes and dropping `verification_events`.
+- **Automated Verification:**
+  - Added 4 comprehensive tests to `tests/test_database.py`:
+    - `test_verification_event_model_creation_and_attributes`: defaults, UTC timezone-aware timestamps, enum mapping.
+    - `test_verification_event_outcome_and_flow_validation`: validates strict bounded outcome and flow rejection of invalid/empty values.
+    - `test_verification_events_schema_migration_and_constraints`: migration execution, column/index inspection, composite index query verification, and single-revision rollback.
+    - `test_verification_events_foreign_key_set_null_on_delete`: verifies audit preservation with `ON DELETE SET NULL` when speakers or devices are deleted.
+  - Database test suite expanded from 17 to **21 tests passing in 1.05s**.
+  - Total backend automated test suite expanded from 234 to **238 tests passing in 5.32s**.
+  - Verified clean frontend suite (**23/23 tests passing**, 0 lint errors, build passing in 182ms).
+  - ML sanity check verified (ECAPA-TDNN CPU inference score: 0.8668).
+
 ---
 
 ## 3. Verified Test Results
@@ -533,14 +558,14 @@ Increment 3B connects the React `OverviewPage` (`frontend/src/components/pages/O
 | :--- | :--- | :--- | :--- |
 | **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 154ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 173ms** |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 182ms** |
+| **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.05s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
 | **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **234/234 tests PASSED in 5.31s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **238/238 tests PASSED in 5.32s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -550,26 +575,28 @@ Increment 3B connects the React `OverviewPage` (`frontend/src/components/pages/O
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Frontend Development Demonstration Mode:**
+1. **Uninstrumented Verification Logging (Current Limitation):**
+   - *Status:* The schema and migration for `verification_events` are established, but `POST /verify` does not yet record verification events to the database. Event persistence will be implemented in Increment 3C.2.
+2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
-2. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
+3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with persistent storage (PostgreSQL/Redis) in Milestone 3C.4 (Shared Challenge & Rate Limit Storage).
-3. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
+4. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
-4. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
+5. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
    - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
    - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
-5. **Voice Cloning Limitations (`SEC-010`):**
+6. **Voice Cloning Limitations (`SEC-010`):**
    - *Risk:* Spoken digit challenge-response mitigates static replay attacks, but does not defeat low-latency real-time generative voice cloning.
 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3C / Milestone 4C: Devices Page Live API & Interactive Verification Integration**:
-1. Connect `DevicesPage` to the newly established `GET /devices` endpoint via `apiClient.getDevices()`.
-2. Wire `POST /challenge` and `POST /verify` to execute real biometric inference and Vosk liveness detection with browser audio recordings.
-3. Establish persistent verification log tables and event journal storage in future database increments.
+Proceed to **Increment 3C.2: Verification Event Repository & Logging Instrumentation**:
+1. Implement `VerificationEventRepository` in `app/repositories/verification_event_repository.py` supporting write operations and windowed aggregation queries.
+2. Instrument `POST /verify` (`app/api/routes_verification.py`) to record persistent verification events on verified, rejected, challenge_failed, unauthorized, and error execution paths.
+3. Keep dashboard integration and security event recording separated into their respective milestones.
 
 
 
