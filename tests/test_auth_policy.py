@@ -30,6 +30,7 @@ def test_anonymous_role_permissions():
     assert not has_permission(Role.ANONYMOUS, Permission.CHALLENGE_CREATE)
     assert not has_permission(Role.ANONYMOUS, Permission.VERIFY_BIOMETRIC)
     assert not has_permission(Role.ANONYMOUS, Permission.IDENTIFY_BIOMETRIC)
+    assert not has_permission(Role.ANONYMOUS, Permission.METRICS_READ)
 
 
 def test_device_role_permissions():
@@ -40,6 +41,7 @@ def test_device_role_permissions():
     assert not has_permission(Role.DEVICE, Permission.SPEAKERS_LIST)
     assert not has_permission(Role.DEVICE, Permission.SPEAKER_ENROLL)
     assert not has_permission(Role.DEVICE, Permission.IDENTIFY_BIOMETRIC)
+    assert not has_permission(Role.DEVICE, Permission.METRICS_READ)
 
 
 def test_user_role_permissions():
@@ -50,6 +52,7 @@ def test_user_role_permissions():
     assert not has_permission(Role.USER, Permission.SPEAKERS_LIST)
     assert not has_permission(Role.USER, Permission.SPEAKER_ENROLL)
     assert not has_permission(Role.USER, Permission.IDENTIFY_BIOMETRIC)
+    assert not has_permission(Role.USER, Permission.METRICS_READ)
 
 
 def test_admin_role_permissions():
@@ -86,6 +89,12 @@ def test_endpoint_policy_discovery():
     assert identify_policy is not None
     assert identify_policy.auth_scheme == AuthScheme.FIREBASE_JWT
     assert Permission.IDENTIFY_BIOMETRIC in identify_policy.required_permissions
+
+    metrics_policy = get_endpoint_policy("/metrics/verification", "GET")
+    assert metrics_policy is not None
+    assert metrics_policy.auth_scheme == AuthScheme.FIREBASE_JWT
+    assert Permission.METRICS_READ in metrics_policy.required_permissions
+    assert not is_public_endpoint("/metrics/verification", "GET")
 
 
 def test_nonexistent_endpoint_policy():

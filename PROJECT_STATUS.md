@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 3C.2 — Verification Event Repository (Completed)  
+**Current Milestone:** Increment 3C.4 — Admin Verification Metrics API (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Verification event repository established with caller-controlled transactions and bounded windowed queries, 251 backend automated tests passing in 5.41s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Verification metrics API exposed with strict admin RBAC and caller-controlled repository queries, 280 backend automated tests passing in 7.01s, 23 frontend unit/integration tests passing in 152ms, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/verification_event_repository.py`, providing a dedicated SQLAlchemy 2.0 data access layer for the persistent `VerificationEvent` audit journal. The repository encapsulates all query logic, pagination, and database aggregates while adhering strictly to the architecture's caller-controlled transaction convention (methods add records and flush to populate generated integer primary keys without calling `commit()` or `rollback()`). Key capabilities include `create_event(...)` with bounded outcome and flow validation, `get_event(...)` and `get_or_raise(...)` for ID retrieval, `list_events(...)` with bounded pagination (1 to 500) and deterministic newest-first ordering (`created_at DESC, id DESC`), `count_events(...)` executing database `func.count(id)` aggregates, and `count_by_outcome(...)` computing grouped outcome breakdowns. All time-window filters adhere strictly to the `[start_time, end_time)` (start inclusive, end exclusive) UTC interval convention. Raw audio, audio paths, 192-d vectors, similarity scores, passwords, bearer tokens, and device secrets are strictly excluded from all queries, logs, and representations. **Note: Verification endpoint route instrumentation and React dashboard integration are intentionally not implemented in this increment and remain scheduled for subsequent increments.** The automated test suite expanded to **251 backend tests passing in 5.41s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
+Increment 3C.4 implements the administrative verification metrics endpoint in `app/api/routes_metrics.py`, exposing `GET /metrics/verification` and `GET /metrics`. It computes aggregate verification telemetry strictly derived from `VerificationEventRepository.count_by_outcome()` while preserving caller-controlled transactions and request-scoped database sessions. Aggregates include total attempts and counts for `verified`, `rejected`, `challenge_failed`, and `error`. The biometric success rate is defined strictly as `verified / (verified + rejected + challenge_failed) * 100`, explicitly excluding processing errors (`error`) from the denominator to reflect pure biometric decision accuracy (safely returning `0.0` when the denominator is zero). The endpoint supports bounded UTC time window filtering (`[start_time, end_time)` interval convention) with `start_time <= end_time` validation and verification flow filtering (`web` or `device`). Access is restricted strictly to administrators via server-side Firebase authentication (`get_current_admin`, `check_revoked=True`, requiring `Permission.METRICS_READ`); ordinary users, unauthenticated clients, and device identities are firmly denied. Data minimization is strictly maintained: no raw event rows, individual attempt timestamps, user IDs, speaker IDs, device IDs, request IDs, audio files, embeddings, or similarity scores are exposed. The automated test suite expanded to **280 backend tests passing in 7.01s** and **23 frontend tests passing in 152ms** with zero linter warnings and clean production builds.
 
 
 ---
@@ -619,16 +619,68 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
   - Total backend automated test suite expanded from 251 to **266 tests passing in 6.28s**.
   - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 186ms).
   - ML sanity check verified (ECAPA-TDNN CPU inference score: 0.8668).
-  - **Pending Scope Notice:** Security-event journal instrumentation and React dashboard telemetry integration remain pending future increments.
+
+### Increment 3C.4: Admin Verification Metrics API (Completed)
+- **Admin Verification Metrics Endpoint (`app/api/routes_metrics.py`):**
+  - Implemented `GET /metrics/verification` and `GET /metrics` alias routes exposing aggregate biometric verification metrics from the persistent `VerificationEvent` journal.
+  - Exclusively queries aggregates via `VerificationEventRepository.count_by_outcome(...)` adhering strictly to request-scoped database sessions and caller-controlled transactions (zero repository commits).
+  - Returns structured, documented JSON schema (`VerificationMetricsResponse`):
+    - `total`: Total recorded verification events matching filters.
+    - `verified`: Accepted biometric verifications.
+    - `rejected`: Rejected biometric comparisons below threshold.
+    - `challenge_failed`: Spoken digit challenge failures.
+    - `error`: Processing, media decoding, or runtime errors.
+    - `success_rate`: Biometric verification success percentage.
+    - `start_time` / `end_time`: Normalized UTC window boundaries (if queried).
+    - `verification_flow`: Filter applied (`web` or `device`, or `None`).
+  - **Explicit Success Rate Denominator:**
+    - Formula: `verified / (verified + rejected + challenge_failed) * 100.0` (rounded to 2 decimal places).
+    - Processing errors (`error`) represent media transport or system faults rather than biometric decisions and are explicitly excluded from the denominator.
+    - When `verified + rejected + challenge_failed == 0`, the endpoint returns `0.0` safely avoiding division by zero.
+  - **Time Window & Flow Filtering:**
+    - Supports bounded UTC time window filtering adhering to the `[start_time, end_time)` start-inclusive, end-exclusive convention.
+    - Validates that `start_time <= end_time` (returns HTTP 400 with clear message on invalid window).
+    - Supports `verification_flow` query parameter, validating against `VALID_VERIFICATION_FLOWS` (returns HTTP 400 on invalid flow).
+  - **Administrative Authorization & Security Boundaries:**
+    - Requires server-side Firebase authentication and administrative RBAC (`admin: AuthenticatedUser = Depends(get_current_admin)` with `check_revoked=True`).
+    - Declared `Permission.METRICS_READ = "metrics:read"` in `app/core/auth_policy.py`, assigned to `Role.ADMIN`, and mapped in `ENDPOINT_POLICIES`.
+    - Strictly rejects unauthenticated requests (HTTP 401), ordinary users with `Role.USER` (HTTP 403 Forbidden), device identities (HTTP 401), and expired/revoked tokens (HTTP 401).
+  - **Strict Data Minimization Guarantee:**
+    - Exposes only aggregate counts and percentages.
+    - Never leaks raw event records, individual attempt timestamps, user IDs, speaker IDs, device IDs, request IDs, audio files, embeddings, or similarity scores.
+  - **Fail-Closed Error Handling:**
+    - Catches database errors and returns sanitized HTTP 500 without leaking stack traces or SQL details.
+- **Automated Verification:**
+  - Added dedicated test suite in `tests/test_metrics_api.py` (14 tests):
+    - Admin access succeeds on `/metrics/verification` and `/metrics` returning 200 with schema.
+    - Unauthenticated requests return HTTP 401.
+    - Ordinary user tokens (`Role.USER`) return HTTP 403 Forbidden.
+    - Device headers without admin token return HTTP 401.
+    - Expired and revoked tokens return HTTP 401.
+    - Empty database returns all zeros (`total: 0`, `success_rate: 0.0`).
+    - Mixed outcomes and exact success-rate denominator (5 verified, 3 rejected, 2 challenge_failed, 4 error -> total 14, denominator 10, success_rate 50.0%).
+    - Zero biometric attempts with errors returns `success_rate: 0.0` without division by zero.
+    - Bounded UTC time-window filtering (`[start, end)` inclusive-exclusive).
+    - Inverted time window (`start_time > end_time`) returns HTTP 400.
+    - Verification flow filtering isolates `web` vs `device`.
+    - Invalid flow returns HTTP 400.
+    - Data minimization: asserts sensitive IDs, embeddings, and similarity scores are completely absent from response.
+    - Fail-closed database failure returns sanitized HTTP 500.
+  - Updated `tests/test_auth_policy.py` verifying `Permission.METRICS_READ` assignment and endpoint policy discovery.
+  - Total automated backend test suite expanded from 266 to **280 tests passing in 7.01s**.
+  - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 193ms).
+  - ML inference sanity check passed (ECAPA-TDNN score: 0.8668).
+  - **Pending Scope Notice:** React dashboard integration and security-event journal instrumentation remain pending future increments.
 
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 156ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 152ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 186ms** |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 193ms** |
+| **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
 | **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
 | **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.08s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
@@ -637,7 +689,7 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **266/266 tests PASSED in 6.28s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **280/280 tests PASSED in 7.01s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -647,7 +699,7 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
 
 ## 4. Known Issues & Remaining Security Risks
 1. **Security Event Logging Uninstrumented (Current Limitation):**
-   - *Status:* `VerificationEvent` schema, repository, and `POST /verify` route logging are now active. However, security event logging (e.g. rate limit exhaustion, unauthorized access attempts, tampering) and dashboard telemetry queries remain to be instrumented.
+   - *Status:* `VerificationEvent` schema, repository, `POST /verify` route logging, and aggregate verification metrics API are active. However, security event logging (e.g. rate limit exhaustion, unauthorized access attempts, tampering) remains to be instrumented.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
@@ -664,10 +716,11 @@ Increment 3C.2 implements `VerificationEventRepository` in `app/repositories/ver
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3C.4: Connect Overview Dashboard Telemetry to Real Verification Events**:
-1. Add backend metrics endpoints (`GET /telemetry/verification-summary`, `GET /telemetry/recent-activity`) utilizing `VerificationEventRepository.count_by_outcome()` and `list_events()`.
-2. Connect the React Overview dashboard verification success rate, total verifications, and recent activity feed to the live backend data.
-3. Keep security events uninstrumented until dedicated security event schema is designed.
+Proceed to **Increment 3C.5: Connect Overview Dashboard Telemetry to Real Verification Metrics API**:
+1. Add typed `getVerificationMetrics(...)` method to `frontend/src/lib/apiClient.ts`.
+2. Connect the React Overview dashboard verification success rate, total verifications count, and outcome breakdown cards to the live `/metrics/verification` backend endpoint.
+3. Keep security incidents honestly uninstrumented until dedicated security event schema is designed.
+
 
 
 

@@ -48,6 +48,7 @@ class Permission(str, Enum):
     VERIFY_BIOMETRIC = "verify:biometric"
     IDENTIFY_BIOMETRIC = "identify:biometric"
     DEVICES_LIST = "devices:list"
+    METRICS_READ = "metrics:read"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -73,6 +74,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.VERIFY_BIOMETRIC,
         Permission.IDENTIFY_BIOMETRIC,
         Permission.DEVICES_LIST,
+        Permission.METRICS_READ,
     },
 }
 
@@ -135,6 +137,20 @@ ENDPOINT_POLICIES: list[EndpointPolicy] = [
         auth_scheme=AuthScheme.FIREBASE_JWT,
         required_permissions=[Permission.IDENTIFY_BIOMETRIC],
         description="Real-time streaming biometric identification. Restricted to Admin.",
+    ),
+    EndpointPolicy(
+        path="/metrics/verification",
+        method="GET",
+        auth_scheme=AuthScheme.FIREBASE_JWT,
+        required_permissions=[Permission.METRICS_READ],
+        description="Aggregate biometric verification telemetry and success metrics. Restricted to Admin.",
+    ),
+    EndpointPolicy(
+        path="/metrics",
+        method="GET",
+        auth_scheme=AuthScheme.FIREBASE_JWT,
+        required_permissions=[Permission.METRICS_READ],
+        description="Aggregate biometric verification telemetry alias. Restricted to Admin.",
     ),
 ]
 

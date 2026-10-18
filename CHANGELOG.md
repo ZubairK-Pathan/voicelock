@@ -10,6 +10,21 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3C.4: Admin Verification Metrics API**
+  - Implemented `app/api/routes_metrics.py` exposing administrative telemetry endpoints `GET /metrics/verification` and `GET /metrics`.
+  - Exposes aggregate verification metrics strictly derived from `VerificationEventRepository.count_by_outcome()` adhering to caller-controlled transaction conventions.
+  - Returns total count, breakdown by outcome (`verified`, `rejected`, `challenge_failed`, `error`), and computed biometric `success_rate`.
+  - Formulated biometric `success_rate`: `verified / (verified + rejected + challenge_failed) * 100` rounded to 2 decimal places. Explicitly excludes processing errors (`error`) from the denominator, reflecting genuine biometric decision performance; safely returns `0.0` when the denominator is zero.
+  - Supports bounded UTC time window filtering (`start_time`, `end_time`) adhering strictly to the `[start, end)` (start-inclusive, end-exclusive) convention, validating `start_time <= end_time` (returns HTTP 400 on inverted range).
+  - Supports verification flow filtering (`web` or `device`), validated against `VALID_VERIFICATION_FLOWS` (returns HTTP 400 on invalid flow).
+  - Enforced strict server-side Firebase authentication and administrative RBAC via `get_current_admin` (`check_revoked=True`) requiring `Permission.METRICS_READ`.
+  - Strictly rejects unauthenticated requests (HTTP 401), ordinary users with `Role.USER` (HTTP 403 Forbidden), device identities (HTTP 401), and expired/revoked tokens (HTTP 401).
+  - Guaranteed data minimization: exposes strictly aggregate counts and filters; never leaks event IDs, user IDs, speaker IDs, device IDs, request IDs, timestamps for individual events, audio, embeddings, similarity scores, or credentials.
+  - Implemented fail-closed database failure handling returning sanitized HTTP 500 without leaking database internals or stack traces.
+  - Declared `Permission.METRICS_READ` in `app/core/auth_policy.py` and registered `/metrics/verification` and `/metrics` in endpoint policies.
+  - Added 14 automated unit and integration tests in `tests/test_metrics_api.py` and updated `tests/test_auth_policy.py`.
+  - Total automated backend test suite expanded from 266 to **280 tests passing in 7.01s**.
+  - Total frontend automated test suite remains 100% passing (**23/23 tests passing**, 0 lint errors, build passing in 193ms).
 - **Increment 3C.3: Persist Verification Outcomes**
   - Integrated `VerificationEventRepository` with `POST /verify` in `app/api/routes_verification.py` to record real verification outcomes (`verified`, `rejected`, `challenge_failed`, `error`) into `verification_events`.
   - Implemented strict lifecycle boundary separation: requests rejected before challenge consumption (401 unauthenticated, 429 rate limit, 403 unauthorized, 404 unregistered speaker, 400 invalid/expired challenge) do not create verification events.
