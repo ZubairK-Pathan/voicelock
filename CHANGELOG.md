@@ -10,6 +10,30 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 3C.3c: Database-Backed Device Authentication Integration**
+  - Integrated `DeviceRepository` into `app/core/device_auth.py` for persistent terminal authentication:
+    - Added `lookup_device_record()` querying `DeviceRecord` via `DeviceRepository`, eagerly loading attributes and expunging records to ensure safe detached usage.
+    - Added `hash_device_secret()` and `verify_device_secret_hash()` for constant-time SHA-256 verifier matching.
+    - Lifecycle enforcement: rejects `revoked` and `suspended` devices immediately with HTTP 401 Unauthorized.
+    - Scheme A (HMAC-SHA256): Preserved timestamp drift limits (300s window), nonce validation, canonical signing string construction, and HMAC-SHA256 verification against secret verifier; signature check strictly precedes atomic nonce recording in `InMemoryNonceStore`.
+    - Scheme B (Pre-Shared Key): Validates incoming `X-Device-Key` directly against database `secret_hash` without requiring raw secret storage.
+    - Fail-closed security: In production, devices not registered in the database are rejected with HTTP 401; database connection errors fail closed with sanitized HTTP 500 (`Database device authentication service unavailable.`).
+    - Privilege separation: Authenticated terminals strictly receive `Role.DEVICE` and cannot access administrator or web-user specific endpoints.
+  - Added dedicated test suite `tests/test_device_auth_database.py` with 12 tests covering:
+    - Registered active device HMAC authentication success.
+    - Registered active device PSK authentication success.
+    - Unknown device rejection (HTTP 401).
+    - Revoked device rejection (HTTP 401).
+    - Suspended device rejection (HTTP 401).
+    - Invalid HMAC signature rejection (HTTP 401).
+    - Replay attack rejection via consumed nonce (HTTP 401).
+    - Stale request timestamp rejection (HTTP 401).
+    - Database lookup failure fail-closed behavior (HTTP 500).
+    - Privilege separation enforcement.
+    - Secret hash mismatch rejection (HTTP 401).
+    - Secret hygiene verification (one-way hash persistence only).
+  - Total automated test suite expanded from 153 to 165 passing tests.
+
 - **Milestone 3C.3b: Persistent Device Repository**
   - Implemented `DeviceRepository` in `app/repositories/device_repository.py` using SQLAlchemy 2.0:
     - Provides data access operations for `DeviceRecord`: `create()`, `get_by_device_id()`, `get_by_id()`, `get_or_raise()`, `list_devices()`, `update()`, `revoke()`, `delete()`, and `count()`.

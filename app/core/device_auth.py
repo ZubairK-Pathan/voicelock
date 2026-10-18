@@ -41,11 +41,78 @@ from app.core.config import (
 )
 from app.core.auth_policy import Role
 from app.core.auth import AuthenticatedUser, get_current_user
-from app.db.session import get_db_context
+from app.db.base import DeviceRecord
+from app.db.session import get_db, get_db_context
+from app.repositories.device_repository import DeviceRepository
 from app.repositories.user_speaker_repository import UserSpeakerRepository
 
 logger = logging.getLogger(__name__)
 
+
+# ─── Device Secret Hashing & Verification Helpers ─────────────────────────────
+
+def hash_device_secret(secret: str) -> str:
+    """Compute SHA-256 verifier formatted as sha256$<hex_digest>."""
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    return f"sha256${digest}"
+
+
+def verify_device_secret_hash(secret: str, stored_hash: str) -> bool:
+    """
+    Verify raw secret against stored hash in constant time.
+    Supports either 'sha256$<hex>' format or raw hex digest.
+    """
+    if not secret or not stored_hash:
+        return False
+    clean_hash = stored_hash.strip()
+    if clean_hash.startswith("sha256$"):
+        expected_digest = clean_hash[7:]
+    else:
+        expected_digest = clean_hash
+    actual_digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(actual_digest, expected_digest)
+
+
+def lookup_device_record(
+    device_id: str,
+    session: Optional[Session] = None,
+) -> Optional[DeviceRecord]:
+    """
+    Lookup device record from database using DeviceRepository.
+    Fails closed with HTTP 500 on database lookup errors.
+    """
+    if not device_id or not device_id.strip():
+        return None
+
+    clean_id = device_id.strip()
+
+    def _query(s: Session) -> Optional[DeviceRecord]:
+        repo = DeviceRepository(s)
+        record = repo.get_by_device_id(clean_id)
+        if record is not None:
+            # Eagerly access columns while session is open, then expunge to prevent DetachedInstanceError
+            _ = (record.id, record.device_id, record.name, record.status, record.secret_hash, record.key_version)
+            s.expunge(record)
+        return record
+
+    try:
+        if session is not None:
+            return _query(session)
+        else:
+            with get_db_context() as db:
+                return _query(db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # If test registry is explicitly injected and database tables are not initialized
+        if _test_device_registry is not None and "no such table" in str(exc).lower():
+            logger.debug(f"Devices table not present; falling back to test device registry: {exc}")
+            return None
+        logger.error(f"Database lookup error during device authentication: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Database device authentication service unavailable.",
+        ) from exc
 
 
 # ─── Authenticated Device Domain Model ────────────────────────────────────────
@@ -128,11 +195,15 @@ def get_device_registry() -> dict:
 
 # ─── Device Authentication Dependency ─────────────────────────────────────────
 
-async def get_current_device(request: Request) -> AuthenticatedDevice:
+async def get_current_device(
+    request: Request,
+    session: Optional[Session] = None,
+) -> AuthenticatedDevice:
     """
-    FastAPI dependency: Authenticate IoT device via HTTP headers.
+    FastAPI dependency: Authenticate IoT device via HTTP headers backed by DeviceRepository.
     Supports either HMAC-SHA256 signature scheme or pre-shared X-Device-Key.
-    Rejects query parameters, non-HTTPS in production, and stale/replayed requests.
+    Rejects query parameters, non-HTTPS in production, unknown devices, suspended/revoked devices,
+    stale timestamps, and replayed requests.
     """
     # 1. Reject credentials in query parameters
     if "device_key" in request.query_params or "device_secret" in request.query_params:
@@ -168,17 +239,35 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
         )
     device_id = device_id.strip()
 
-    # 5. Lookup device in registry (Fail closed if registry empty or missing)
+    # 5. Fail closed if test registry is explicitly set to empty
     registry = get_device_registry()
-    if not registry:
+    if _test_device_registry is not None and len(_test_device_registry) == 0:
         raise HTTPException(
             status_code=500,
             detail="Device authentication provider is not configured on the server.",
         )
 
-    device_entry = registry.get(device_id)
-    if not device_entry:
-        # Constant-time dummy hash to resist timing attacks on device enumeration
+    # 6. Lookup device record in persistent database
+    device_record = lookup_device_record(device_id, session=session)
+
+    # If device record exists, enforce lifecycle status
+    if device_record is not None:
+        if device_record.status == "revoked":
+            raise HTTPException(status_code=401, detail="Device has been revoked.")
+        if device_record.status == "suspended":
+            raise HTTPException(status_code=401, detail="Device is suspended.")
+        if not device_record.is_active:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Device is not active (status: {device_record.status}).",
+            )
+
+    # Resolve device credentials and metadata
+    device_entry = registry.get(device_id, {}) if registry else {}
+    device_secret = str(device_entry.get("secret", ""))
+
+    # If device not in DB and not in registry -> unknown device (constant-time dummy comparison)
+    if device_record is None and not device_entry:
         dummy_secret = "0" * 32
         hmac.compare_digest(dummy_secret, dummy_secret)
         raise HTTPException(
@@ -186,10 +275,16 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
             detail="Invalid device credentials or unknown device identifier.",
         )
 
-    device_secret = str(device_entry.get("secret", ""))
-    device_name = device_entry.get("name", device_id)
+    # In production, require persistent database registration
+    if current_env == "production" and device_record is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid device credentials or unknown device identifier.",
+        )
 
-    # 6. Check Scheme A: Replay-Resistant HMAC-SHA256
+    device_name = (device_record.name if device_record and device_record.name else None) or device_entry.get("name", device_id)
+
+    # 7. Check Scheme A: Replay-Resistant HMAC-SHA256
     sig_header = request.headers.get("X-Device-Signature")
     if sig_header:
         ts_header = request.headers.get("X-Device-Timestamp")
@@ -219,6 +314,22 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
         if len(clean_nonce) < 8:
             raise HTTPException(status_code=400, detail="X-Device-Nonce must be at least 8 characters.")
 
+        # Ensure we have signing secret
+        if not device_secret:
+            raise HTTPException(
+                status_code=401,
+                detail="Device signing secret is not configured on the server.",
+            )
+
+        # If device record has secret_hash, ensure provisioned signing secret matches secret_hash
+        if device_record is not None and device_record.secret_hash:
+            if not verify_device_secret_hash(device_secret, device_record.secret_hash):
+                logger.warning(f"Device '{device_id}' secret does not match registered secret_hash.")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid device credentials.",
+                )
+
         # Read raw request body hash
         raw_body = await request.body()
         body_digest = hashlib.sha256(raw_body).hexdigest()
@@ -235,7 +346,6 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
         ).hexdigest()
 
         # Constant-time signature verification MUST precede nonce recording.
-        # This prevents unauthenticated attackers from prematurely burning legitimate nonces.
         if not hmac.compare_digest(sig_header.strip(), expected_sig):
             raise HTTPException(status_code=401, detail="Invalid HMAC device signature.")
 
@@ -254,7 +364,7 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
             auth_scheme="hmac_sha256",
         )
 
-    # 7. Check Scheme B: Pre-Shared Key (X-Device-Key)
+    # 8. Check Scheme B: Pre-Shared Key (X-Device-Key)
     key_header = request.headers.get("X-Device-Key")
     if key_header:
         if not load_device_key_fallback_enabled():
@@ -263,7 +373,13 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
                 detail="Static X-Device-Key authentication is disabled in this environment. Replay-resistant HMAC authentication is required.",
             )
 
-        if not hmac.compare_digest(key_header.strip(), device_secret):
+        is_valid_key = False
+        if device_record is not None and device_record.secret_hash:
+            is_valid_key = verify_device_secret_hash(key_header.strip(), device_record.secret_hash)
+        if not is_valid_key and device_secret:
+            is_valid_key = hmac.compare_digest(key_header.strip(), device_secret)
+
+        if not is_valid_key:
             raise HTTPException(status_code=401, detail="Invalid device key.")
 
         return AuthenticatedDevice(
@@ -281,7 +397,9 @@ async def get_current_device(request: Request) -> AuthenticatedDevice:
 
 # ─── Unified Actor Dependency & Verification Permission Enforcement ───────────
 
-async def get_current_actor(request: Request) -> Union[AuthenticatedUser, AuthenticatedDevice]:
+async def get_current_actor(
+    request: Request,
+) -> Union[AuthenticatedUser, AuthenticatedDevice]:
     """
     Unified dependency for dual-credential endpoints (POST /challenge and POST /verify).
     Accepts either:

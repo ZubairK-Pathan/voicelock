@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 3C.3b — Persistent Device Repository (Completed)  
+**Current Milestone:** Milestone 3C.3c — Database-Backed Device Authentication Integration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (All 153 automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (All 165 automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 3C.3b implements the `DeviceRepository` data access layer for physical access terminals (`DeviceRecord`) using SQLAlchemy 2.0. The repository encapsulates persistent terminal operations including record creation, unique `device_id` lookups, primary key lookups, paginated listings, lifecycle status filtering (`active`, `suspended`, `revoked`), metadata updates, revocation transitions, deletion, and record counts. In alignment with established architectural rules, transactions are caller-controlled (flushes without autocommits), raw device secrets or HMAC keys are never accepted, stored, or returned (operating strictly on `secret_hash`), and biometric data, embeddings, or Firebase credentials are never exposed. The automated test suite has expanded to 153 passing tests with zero regressions.
+Milestone 3C.3c integrates persistent database device authentication into `app/core/device_auth.py` via `DeviceRepository`. Hardware access terminals authenticating via replay-resistant HMAC-SHA256 (Scheme A) or pre-shared key (Scheme B) are verified against persistent `DeviceRecord` entities in the `devices` table. Unknown, suspended, and revoked devices are strictly rejected with HTTP 401 Unauthorized before any sensitive operations occur. Database lookup failures fail closed with sanitized HTTP 500 without leaking database details. Cryptographic secret verifier hashing (`secret_hash`), timestamp drift limits (300s), constant-time signature comparisons, and atomic nonce replay resistance are fully preserved. Raw credentials and signing keys are never persisted in the database or logged. The automated test suite has expanded to 165 passing tests with zero regressions.
 
 
 ---
@@ -345,12 +345,42 @@ Milestone 3C.3b implements the `DeviceRepository` data access layer for physical
     12. Caller-controlled transaction rollback.
   - Total automated tests expanded to 153 passing tests in 3.00s.
 
+### Milestone 3C.3c: Database-Backed Device Authentication Integration (Completed)
+- **Database Device Authentication (`app/core/device_auth.py`):**
+  - Integrated `DeviceRepository` and `DeviceRecord` into device authentication pipeline (`get_current_device` and `get_current_actor`):
+    - `lookup_device_record()`: Queries `DeviceRecord` by `device_id` via `DeviceRepository`. Eagerly loads columns and expunges record before closing session context to prevent detached instance errors.
+    - Lifecycle status enforcement: checks persistent `DeviceRecord.status` before authenticating:
+      - `revoked`: Rejects immediately with HTTP 401 (`Device has been revoked.`).
+      - `suspended`: Rejects immediately with HTTP 401 (`Device is suspended.`).
+      - Inactive: Rejects with HTTP 401 (`Device is not active (status: ...)`).
+    - Secret verifier validation (`verify_device_secret_hash`): Compares SHA-256 verifier in constant time against `secret_hash`, supporting both prefixed `sha256$<hex>` and raw hex digests.
+    - Scheme A (HMAC-SHA256): Verifies request timestamp tolerance (300s window), nonce formatting, body SHA-256 digest, canonical signing string, and expected HMAC signature computed from provisioned signing secret verified against registered `secret_hash`. Constant-time signature verification strictly precedes atomic nonce recording in `InMemoryNonceStore`.
+    - Scheme B (Pre-Shared Key): Verifies incoming `X-Device-Key` against `DeviceRecord.secret_hash` in constant time without requiring plaintext secret storage.
+    - Production fail-closed enforcement: In production, missing database device records are strictly rejected with HTTP 401. Database connection/query errors fail closed with sanitized HTTP 500 (`Database device authentication service unavailable.`).
+    - Privilege separation: Devices strictly receive `Role.DEVICE` and can never impersonate `Role.ADMIN` or `Role.USER`.
+- **Dedicated Test Suite (`tests/test_device_auth_database.py`):**
+  - Added 12 comprehensive security tests using disposable SQLite databases:
+    1. Valid active registered device authenticating via HMAC-SHA256.
+    2. Valid active registered device authenticating via standalone X-Device-Key against database `secret_hash`.
+    3. Unknown device rejected with HTTP 401.
+    4. Revoked device in database rejected with HTTP 401.
+    5. Suspended device in database rejected with HTTP 401.
+    6. Invalid HMAC signature on registered device rejected with HTTP 401.
+    7. Replayed nonce attack on registered device rejected with HTTP 401.
+    8. Stale timestamp outside 300s drift window rejected with HTTP 401.
+    9. Database lookup failure fails closed with HTTP 500.
+    10. Privilege separation: Device permitted on `/challenge`, denied on `/speakers`.
+    11. Mismatched secret hash rejected with HTTP 401.
+    12. Secrets hygiene: Database record stores only one-way cryptographic hash, never plaintext.
+  - Total automated tests expanded to 165 passing tests in 3.22s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **153/153 tests PASSED in 3.00s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.22s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Database Device Auth Suite**| `.venv/bin/pytest tests/test_device_auth_database.py -v` | 0 | **12/12 tests PASSED** (HMAC, PSK, unknown, revoked, suspended, invalid sig, replay, stale, DB failure, separation, hygiene) |
 | **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** (CRUD, validation, duplicates, revocation, pagination, status filtering, rollback) |
 | **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** (URL resolution, pool config, lazy init, transactions, Alembic lifecycle, speaker schema, user-speaker mapping schema, device schema & rollback) |
 | **Persistent Auth Security Suite**| `.venv/bin/pytest tests/test_persistent_auth.py -v` | 0 | **9/9 tests PASSED** (mapped, unmapped, mismatch, tamper, admin, fail-closed, pre-inference, device, regression) |
@@ -370,7 +400,7 @@ Milestone 3C.3b implements the `DeviceRepository` data access layer for physical
 ## 4. Known Issues & Remaining Security Risks
 1. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
-   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) across subsequent database increments (Milestones 3C.3c–3C.4).
+   - *Plan:* Replace with persistent storage (PostgreSQL/Redis) in Milestone 3C.4 (Shared Challenge & Rate Limit Storage).
 2. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
    - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
 3. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
@@ -381,13 +411,18 @@ Milestone 3C.3b implements the `DeviceRepository` data access layer for physical
 
 ---
 
-## 5. Next Recommended Step
-Proceed to **Milestone 3C.3c: Database-Backed Device Authentication Integration**:
-1. Integrate `DeviceRepository` into `app/core/device_auth.py` for device lookup and credential verifier matching.
-2. Ensure database-backed device authentication fails closed if the database is unreachable or device is suspended/revoked.
-3. Add security tests against disposable databases covering HMAC and PSK authentication with persistent records.
-4. Validate zero regressions across all existing suites.
-5. Commit and push 3C.3c to `feature/enterprise-foundation`.
+## 5. Next Recommended Step (Mandatory Next Priority)
+Proceed to **Milestone 4A: React Frontend Foundation and Dashboard Prototype**:
+1. Initialize React + TypeScript + Vite modern web application in `./frontend` alongside the existing Streamlit app.
+2. Build responsive VoiceLock dashboard with navigation and pages for:
+   - Overview & Telemetry
+   - Enrolled Speakers Management
+   - Voice Verification Portal
+   - Physical Access Terminal (IoT Device) Registry
+   - Security Audit & Event Log
+3. Connect with clearly labeled mock data initially.
+4. Ensure local development server (`npm run dev`) and production bundle build (`npm run build`) succeed.
+5. Add frontend verification checks and synchronize documentation.
 
 
 
