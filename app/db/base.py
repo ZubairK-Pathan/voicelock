@@ -4,7 +4,8 @@ app/db/base.py — SQLAlchemy 2.0 Declarative Base and foundational migration en
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+import json
+from typing import Any, Optional
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
@@ -280,6 +281,266 @@ class VerificationEvent(Base):
                 f"Invalid verification flow '{value}'. Must be one of {sorted(VALID_VERIFICATION_FLOWS)}."
             )
         return value
+
+
+class SecurityEventSeverity(str, Enum):
+    """
+    Controlled severity classifications for enterprise security events.
+    """
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class SecurityEventStatus(str, Enum):
+    """
+    Controlled action/disposition status for security events.
+    """
+    BLOCKED = "blocked"
+    DETECTED = "detected"
+    LOGGED = "logged"
+    RESOLVED = "resolved"
+
+
+class SecurityEventType(str, Enum):
+    """
+    Controlled taxonomy of VoiceLock security incident events.
+    Deliberately separated from routine biometric verification outcomes.
+    """
+    # Rate Limiting & DoS
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
+    PAYLOAD_TOO_LARGE = "payload_too_large"
+
+    # Terminal & Hardware Cryptography
+    HMAC_NONCE_REPLAY = "hmac_nonce_replay"
+    HMAC_SIGNATURE_INVALID = "hmac_signature_invalid"
+    HMAC_TIMESTAMP_SKEW = "hmac_timestamp_skew"
+    UNKNOWN_DEVICE_REJECTED = "unknown_device_rejected"
+    REVOKED_DEVICE_BLOCKED = "revoked_device_blocked"
+    DEVICE_KEY_INVALID = "device_key_invalid"
+
+    # Authentication & Access Control
+    AUTH_TOKEN_EXPIRED = "auth_token_expired"
+    AUTH_TOKEN_REVOKED = "auth_token_revoked"
+    AUTH_TOKEN_INVALID = "auth_token_invalid"
+    UNAUTHORIZED_ACCESS = "unauthorized_access"
+    UNAUTHORIZED_SPEAKER_CLAIM = "unauthorized_speaker_claim"
+
+    # System & Administrative
+    ADMIN_ACTION = "admin_action"
+    SUSPICIOUS_PAYLOAD = "suspicious_payload"
+
+
+VALID_SECURITY_EVENT_SEVERITIES = frozenset(item.value for item in SecurityEventSeverity)
+VALID_SECURITY_EVENT_STATUSES = frozenset(item.value for item in SecurityEventStatus)
+VALID_SECURITY_EVENT_TYPES = frozenset(item.value for item in SecurityEventType)
+
+FORBIDDEN_SECURITY_METADATA_KEYS = frozenset({
+    "token", "authorization", "password", "secret", "secret_hash",
+    "key", "hmac_key", "signature", "audio", "embedding",
+    "similarity", "similarity_score", "ip", "client_ip", "user_agent",
+})
+
+
+class SecurityEvent(Base):
+    """
+    Durable security event audit journal entity.
+    Records enterprise security incidents, cryptographic anomalies,
+    access control violations, and administrative actions without persisting
+    raw audio, biometric embeddings, similarity scores, or credentials.
+
+    Privacy & Security Architecture:
+    1. Separation of Concerns: Routine biometric match results and verification
+       outcomes are recorded in VerificationEvent. SecurityEvent does NOT duplicate
+       or store standard verification outcomes.
+    2. Strict Data Minimization: Raw audio, biometric embeddings, similarity scores,
+       bearer tokens, passwords, HMAC keys, and raw exception stack traces are
+       strictly excluded from persistence.
+    3. Privacy Safeguard: IP addresses and user-agent strings are excluded by default
+       to prevent unnecessary tracking and PII accumulation.
+    4. Audit History Preservation: When an associated registered device is deleted,
+       the security event is retained with device_id set to NULL (ondelete="SET NULL").
+       user_id is an external identity string (Firebase UID) with no cascading delete.
+    5. Bounded Metadata: Metadata is optional, bounded to <=2048 characters, and
+       restricted to safe structured JSON keys. Prohibits arbitrary data sinks.
+    6. Non-Repudiation Boundary: This table provides durable enterprise audit logging;
+       it does not claim hardware-backed tamper-proof or cryptographic non-repudiation.
+    """
+    __tablename__ = "security_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    severity: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="blocked",
+    )
+    details: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("devices.device_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    request_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+    metadata_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('low', 'medium', 'high', 'critical')",
+            name="ck_security_events_severity",
+        ),
+        CheckConstraint(
+            "status IN ('blocked', 'detected', 'logged', 'resolved')",
+            name="ck_security_events_status",
+        ),
+        CheckConstraint(
+            "event_type IN ("
+            "'rate_limit_exceeded', 'payload_too_large', 'hmac_nonce_replay', "
+            "'hmac_signature_invalid', 'hmac_timestamp_skew', 'unknown_device_rejected', "
+            "'revoked_device_blocked', 'device_key_invalid', 'auth_token_expired', "
+            "'auth_token_revoked', 'auth_token_invalid', 'unauthorized_access', "
+            "'unauthorized_speaker_claim', 'admin_action', 'suspicious_payload'"
+            ")",
+            name="ck_security_events_event_type",
+        ),
+        Index("ix_security_events_created_severity", "created_at", "severity"),
+        Index("ix_security_events_created_type", "created_at", "event_type"),
+    )
+
+    # ORM relationship for device navigation
+    device: Mapped[Optional["DeviceRecord"]] = relationship(
+        "DeviceRecord",
+        backref="security_events",
+        passive_deletes=True,
+    )
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("status", "blocked")
+        if "created_at" not in kwargs or kwargs["created_at"] is None:
+            kwargs["created_at"] = datetime.now(timezone.utc)
+        super().__init__(**kwargs)
+
+    @validates("created_at")
+    def validate_created_at(self, key: str, value: Any) -> datetime:
+        if value is None:
+            return datetime.now(timezone.utc)
+        if not isinstance(value, datetime):
+            raise ValueError("created_at must be a datetime object.")
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
+
+    @validates("event_type")
+    def validate_event_type(self, key: str, value: str) -> str:
+        if not value or value not in VALID_SECURITY_EVENT_TYPES:
+            raise ValueError(
+                f"Invalid security event_type '{value}'. Must be one of {sorted(VALID_SECURITY_EVENT_TYPES)}."
+            )
+        return value
+
+    @validates("severity")
+    def validate_severity(self, key: str, value: str) -> str:
+        if not value or value not in VALID_SECURITY_EVENT_SEVERITIES:
+            raise ValueError(
+                f"Invalid security severity '{value}'. Must be one of {sorted(VALID_SECURITY_EVENT_SEVERITIES)}."
+            )
+        return value
+
+    @validates("status")
+    def validate_status(self, key: str, value: str) -> str:
+        if not value or value not in VALID_SECURITY_EVENT_STATUSES:
+            raise ValueError(
+                f"Invalid security status '{value}'. Must be one of {sorted(VALID_SECURITY_EVENT_STATUSES)}."
+            )
+        return value
+
+    @validates("details")
+    def validate_details(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value) > 255:
+            raise ValueError("details must not exceed 255 characters.")
+        return value
+
+    @validates("user_id")
+    def validate_user_id(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value) > 128:
+            raise ValueError("user_id must not exceed 128 characters.")
+        return value
+
+    @validates("device_id")
+    def validate_device_id(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value) > 64:
+            raise ValueError("device_id must not exceed 64 characters.")
+        return value
+
+    @validates("request_id")
+    def validate_request_id(self, key: str, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value) > 64:
+            raise ValueError("request_id must not exceed 64 characters.")
+        return value
+
+    @validates("metadata_json")
+    def validate_metadata_json(self, key: str, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            lowered_keys = {str(k).lower() for k in value.keys()}
+            prohibited = lowered_keys & FORBIDDEN_SECURITY_METADATA_KEYS
+            if prohibited:
+                raise ValueError(f"metadata_json contains prohibited sensitive key(s): {sorted(prohibited)}")
+            serialized = json.dumps(value)
+            if len(serialized) > 2048:
+                raise ValueError("metadata_json must not exceed 2048 characters.")
+            return serialized
+
+        if not isinstance(value, str):
+            raise ValueError("metadata_json must be a JSON string or dict.")
+        if len(value) > 2048:
+            raise ValueError("metadata_json must not exceed 2048 characters.")
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("metadata_json must represent a JSON object.")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"metadata_json must be valid JSON: {exc}")
+
+        lowered_keys = {str(k).lower() for k in parsed.keys()}
+        prohibited = lowered_keys & FORBIDDEN_SECURITY_METADATA_KEYS
+        if prohibited:
+            raise ValueError(f"metadata_json contains prohibited sensitive key(s): {sorted(prohibited)}")
+        return value
+
 
 
 

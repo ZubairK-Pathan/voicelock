@@ -10,6 +10,24 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3D.1: Persistent Security Event Schema**
+  - Defined `SecurityEvent` model in `app/db/base.py` for persistent logging of enterprise security incidents, cryptographic anomalies, and access control violations, strictly separated from routine biometric verification outcomes (`VerificationEvent`).
+  - Implemented controlled security taxonomy enums:
+    - `SecurityEventType`: `rate_limit_exceeded`, `payload_too_large`, `hmac_nonce_replay`, `hmac_signature_invalid`, `hmac_timestamp_skew`, `unknown_device_rejected`, `revoked_device_blocked`, `device_key_invalid`, `auth_token_expired`, `auth_token_revoked`, `auth_token_invalid`, `unauthorized_access`, `unauthorized_speaker_claim`, `admin_action`, `suspicious_payload`.
+    - `SecurityEventSeverity`: `low`, `medium`, `high`, `critical`.
+    - `SecurityEventStatus`: `blocked`, `detected`, `logged`, `resolved` (defaulting to `blocked`).
+  - Added strict data minimization and privacy guarantees:
+    - Zero persistence of raw audio, embeddings, similarity scores, bearer tokens, passwords, HMAC keys, signatures, or raw exception stack traces.
+    - Excludes client IP addresses and user-agent strings by default.
+    - Optional structured metadata (`metadata_json`) bounded to $\le 2048$ characters with proactive validation preventing prohibited sensitive keys.
+    - Bounded string lengths: `details` ($\le 255$), `user_id` ($\le 128$), `device_id` ($\le 64$), `request_id` ($\le 64$).
+  - Referential integrity & audit retention:
+    - `device_id` references `devices.device_id` with `ondelete="SET NULL"`, preserving audit trails when registered devices are deleted.
+    - `user_id` stores external Firebase UID string without local cascading delete.
+  - Implemented Alembic migration `ea5fe481812c_create_security_events_table.py` (`down_revision = 'd0199d309a47'`) creating `security_events` table, check constraints, single-column indexes, and composite indexes (`created_at` + `severity`, `created_at` + `event_type`) with symmetric downgrade.
+  - Re-exported `SecurityEvent`, enums, and validator sets in `app/db/__init__.py`.
+  - Added 6 automated tests in `tests/test_database.py` verifying model defaults, taxonomy enums, length boundaries, prohibited metadata keys, Alembic migration upgrade/downgrade, and `ON DELETE SET NULL` retention semantics.
+  - Total automated backend test suite expanded from 280 to **286 tests passing in 7.38s**.
 - **Increment 3C.5: Connect React Overview to Real Verification Metrics**
   - Extended `frontend/src/lib/apiClient.ts` with typed method `getVerificationMetrics(params?, options?)` calling `GET /metrics/verification` with Firebase Bearer token authentication.
   - Added `VerificationMetricsResponse` TypeScript interface in `frontend/src/types/index.ts` exactly mirroring the backend schema (`total`, `verified`, `rejected`, `challenge_failed`, `error`, `success_rate`, `start_time`, `end_time`, `verification_flow`).

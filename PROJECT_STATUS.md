@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 3C.5 — Connect React Overview to Real Verification Metrics (Completed)  
+**Current Milestone:** Increment 3D.1 — Persistent Security Event Schema (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (React Overview dashboard integrated with live backend verification metrics API, 280 backend automated tests passing in 7.83s, 31 frontend unit/integration tests passing in 157ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Persistent security event schema and Alembic migration active, 286 backend automated tests passing in 7.38s, 31 frontend unit/integration tests passing in 157ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3C.5 connects the React Overview dashboard to the real, authenticated `GET /metrics/verification` backend endpoint via `apiClient.getVerificationMetrics(...)`. The `VerificationMetricsResponse` TypeScript interface reflects the exact backend response structure (`total`, `verified`, `rejected`, `challenge_failed`, `error`, `success_rate`, `start_time`, `end_time`, `verification_flow`). In `OverviewPage.tsx`, the primary "Verification Success Rate" stat card now displays the live backend-computed biometric percentage and evaluated attempt counts, safely rendering `—` during loading and on errors, while accurately rendering genuine zero-valued responses as `0.0%`. A dedicated "Biometric Verification Telemetry" breakdown card displays live aggregate counts for Verified (Access Granted), Biometric Rejected, Challenge Failed (Spoof / STT), and Processing Errors, accompanied by the explicit denominator definition (`verified / (verified + rejected + challenge_failed) * 100`, excluding system errors). All zero-mock invariants are preserved, no fake trends are derived from single snapshots, and security incidents remain honestly designated as uninstrumented. The automated test suite expanded to **31 frontend tests passing in 157ms** with 0 lint warnings and clean build, alongside **280 backend tests passing in 7.83s**.
+Increment 3D.1 defines the database model and Alembic migration for a persistent security-event journal (`security_events`), establishing a durable schema for enterprise security incidents, cryptographic anomalies, and access control violations, cleanly decoupled from routine biometric verification outcomes (`verification_events`). The `SecurityEvent` model in `app/db/base.py` enforces controlled taxonomies for event types (`rate_limit_exceeded`, `payload_too_large`, `hmac_nonce_replay`, `hmac_signature_invalid`, `hmac_timestamp_skew`, `unknown_device_rejected`, `revoked_device_blocked`, `device_key_invalid`, `auth_token_expired`, `auth_token_revoked`, `auth_token_invalid`, `unauthorized_access`, `unauthorized_speaker_claim`, `admin_action`, `suspicious_payload`), severities (`low`, `medium`, `high`, `critical`), and statuses (`blocked`, `detected`, `logged`, `resolved`). Strict data minimization and privacy policies are enforced at both schema and validation layers: zero persistence of raw audio, embeddings, similarity scores, bearer tokens, passwords, HMAC keys, signatures, or raw exception stack traces; client IP addresses and user-agents are excluded by default; optional structured metadata (`metadata_json`) is bounded to $\le 2048$ characters with proactive filtering preventing prohibited sensitive keys. Referential integrity enforces `ON DELETE SET NULL` on `device_id`, preserving security event history when terminals are deleted, while `user_id` stores external Firebase UID strings without local cascading deletion. Alembic migration `ea5fe481812c` (`down_revision = 'd0199d309a47'`) provisions the table, check constraints, single-column indexes, and composite indexes (`created_at` + `severity`, `created_at` + `event_type`) with symmetric rollback. Automated backend tests expanded to **286 tests passing in 7.38s** with zero regressions.
 
 
 ---
@@ -715,6 +715,46 @@ Increment 3C.5 connects the React Overview dashboard to the real, authenticated 
   - Total backend automated test suite verified (280/280 tests passing in 7.83s).
   - ML inference sanity check passed (ECAPA-TDNN score: 0.8668).
 
+### Increment 3D.1: Persistent Security Event Schema (Completed)
+- **Database Model & Taxonomies (`app/db/base.py`, `app/db/__init__.py`):**
+  - Defined `SecurityEvent` model in `app/db/base.py` for persistent enterprise security audit logging, completely independent of routine biometric verification attempts (`VerificationEvent`).
+  - Controlled security event taxonomies:
+    - `SecurityEventType`: `rate_limit_exceeded`, `payload_too_large`, `hmac_nonce_replay`, `hmac_signature_invalid`, `hmac_timestamp_skew`, `unknown_device_rejected`, `revoked_device_blocked`, `device_key_invalid`, `auth_token_expired`, `auth_token_revoked`, `auth_token_invalid`, `unauthorized_access`, `unauthorized_speaker_claim`, `admin_action`, `suspicious_payload`.
+    - `SecurityEventSeverity`: `low`, `medium`, `high`, `critical`.
+    - `SecurityEventStatus`: `blocked`, `detected`, `logged`, `resolved` (defaults to `blocked`).
+  - Strict privacy and data minimization invariants:
+    - Strictly excludes raw audio, 192-d biometric embeddings, similarity scores, bearer tokens, passwords, HMAC keys, signatures, and raw exception stack traces.
+    - Excludes client IP addresses and user-agent strings by default.
+    - Bounded string lengths: `details` ($\le 255$), `user_id` ($\le 128$), `device_id` ($\le 64$), `request_id` ($\le 64$).
+    - Optional structured metadata (`metadata_json`) bounded to $\le 2048$ characters, parsed and validated as a JSON object, with active rejection of prohibited sensitive keys (`token`, `password`, `secret`, `secret_hash`, `key`, `hmac_key`, `signature`, `audio`, `embedding`, `similarity`, `similarity_score`, `ip`, `client_ip`, `user_agent`).
+  - Referential integrity & audit trail preservation:
+    - `device_id` references `devices.device_id` with `ondelete="SET NULL"`, preserving audit trails when registered terminals are deleted.
+    - `user_id` stores external Firebase UID string without local cascading deletion.
+  - Check constraints:
+    - `ck_security_events_severity`: validates allowed severity values.
+    - `ck_security_events_status`: validates allowed status values.
+    - `ck_security_events_event_type`: validates allowed event type values.
+  - Index strategy:
+    - Single-column indexes on `created_at`, `event_type`, `severity`, `user_id`, `device_id`, `request_id`.
+    - Composite indexes: `ix_security_events_created_severity` on `(created_at, severity)` and `ix_security_events_created_type` on `(created_at, event_type)` for efficient time-window security incident queries.
+  - Re-exported `SecurityEvent`, enums, and sets in `app/db/__init__.py`.
+- **Alembic Migration (`alembic/versions/ea5fe481812c_create_security_events_table.py`):**
+  - Chained revision `ea5fe481812c` with `down_revision = 'd0199d309a47'`.
+  - Implemented symmetric `upgrade()` creating `security_events` table, foreign keys, check constraints, and 8 indexes.
+  - Implemented clean `downgrade()` dropping all indexes and dropping `security_events`.
+- **Automated Verification:**
+  - Added 6 comprehensive tests in `tests/test_database.py`:
+    - `test_security_event_model_creation_and_defaults`: verifies instantiation, UTC timezone-aware default `created_at`, default `status="blocked"`, and optional attributes.
+    - `test_security_event_validation_enums_and_taxonomy`: verifies strict bounded validation of event types, severities, and statuses, rejecting invalid or empty values.
+    - `test_security_event_length_bounds_and_metadata_validation`: verifies length boundaries on `details`, `user_id`, `device_id`, `request_id`, and `metadata_json`, as well as JSON object structure.
+    - `test_security_event_prohibited_metadata_keys`: verifies rejection of prohibited sensitive keys in metadata.
+    - `test_security_events_schema_migration_and_constraints`: executes migration against disposable database, verifies reflected schema, inserts diverse events, executes composite and single filter queries, and tests single-revision downgrade to `d0199d309a47` and re-upgrade to `head`.
+    - `test_security_events_foreign_key_set_null_on_device_delete`: verifies audit preservation with `ON DELETE SET NULL` when registered devices are deleted.
+  - Database test suite expanded from 21 to **27 tests passing in 1.63s**.
+  - Total automated backend test suite expanded from 280 to **286 tests passing in 7.38s**.
+  - Frontend test suite remains clean (**31/31 tests passing**, 0 lint warnings, build passing in 190ms).
+  - ML sanity check verified (ECAPA-TDNN score: 0.8668).
+
 ---
 
 ## 3. Verified Test Results
@@ -726,13 +766,13 @@ Increment 3C.5 connects the React Overview dashboard to the real, authenticated 
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
 | **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
-| **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **21/21 tests PASSED in 1.08s** (VerificationEvent entity, bounded outcome/flow validators, migration d0199d309a47 upgrade/downgrade, composite indexes, ON DELETE SET NULL) |
+| **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **27/27 tests PASSED in 1.63s** (VerificationEvent and SecurityEvent models, bounded taxonomy validators, metadata privacy checks, migration ea5fe481812c upgrade/downgrade, composite indexes, ON DELETE SET NULL retention) |
 | **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **280/280 tests PASSED in 7.83s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 21 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **286/286 tests PASSED in 7.38s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -742,7 +782,7 @@ Increment 3C.5 connects the React Overview dashboard to the real, authenticated 
 
 ## 4. Known Issues & Remaining Security Risks
 1. **Security Event Logging Uninstrumented (Current Limitation):**
-   - *Status:* `VerificationEvent` schema, repository, `POST /verify` route logging, aggregate verification metrics API, and React Overview metrics dashboard are active. However, security event logging (e.g. rate limit exhaustion, unauthorized access attempts, tampering) remains to be instrumented.
+   - *Status:* `SecurityEvent` schema and Alembic migration are now established in Increment 3D.1. However, security event repository, API routes, route instrumentation (e.g. rate limit exhaustion, unauthorized access attempts, tampering), and frontend integration remain to be implemented.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
@@ -759,10 +799,10 @@ Increment 3C.5 connects the React Overview dashboard to the real, authenticated 
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3D: Recent Verification Events Activity Stream API & Frontend Integration**:
-1. Implement authenticated `GET /metrics/recent-activity` (or `GET /events/verification`) exposing sanitized, non-PII verification records (`outcome`, `verification_flow`, `created_at`, `status`) using `VerificationEventRepository.list_events()`.
-2. Connect the React Overview page's "Recent Biometric Access Attempts" table to replace the uninstrumented placeholder with live recent attempt rows.
-3. Keep security incidents honestly uninstrumented until dedicated security event schema is designed.
+Proceed to **Increment 3D.2: Security Event Repository**:
+1. Implement `SecurityEventRepository` in `app/repositories/security_event_repository.py` following caller-controlled transaction conventions.
+2. Implement methods for creating security events, paginated listing, severity and time-window filtering, and aggregate counts.
+3. Add dedicated unit tests for the repository.
 
 
 

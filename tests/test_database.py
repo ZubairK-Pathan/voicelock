@@ -35,6 +35,14 @@ from app.db.base import (
     VALID_VERIFICATION_OUTCOMES,
     VALID_VERIFICATION_FLOWS,
     VerificationEvent,
+    SecurityEventSeverity,
+    SecurityEventStatus,
+    SecurityEventType,
+    VALID_SECURITY_EVENT_SEVERITIES,
+    VALID_SECURITY_EVENT_STATUSES,
+    VALID_SECURITY_EVENT_TYPES,
+    FORBIDDEN_SECURITY_METADATA_KEYS,
+    SecurityEvent,
 )
 from app.db.session import (
     get_database_url,
@@ -968,7 +976,407 @@ def test_verification_events_foreign_key_set_null_on_delete(monkeypatch):
                 pass
 
 
-# ─── 7. Application Startup & Import Decoupling ────────────────────────────────
+# ─── 7. Security Event Schema and Migration Tests ─────────────────────────────
+
+def test_security_event_model_creation_and_defaults():
+    """
+    Verify SecurityEvent model instantiation, defaults, and optional attributes.
+    """
+    event = SecurityEvent(
+        event_type=SecurityEventType.RATE_LIMIT_EXCEEDED,
+        severity=SecurityEventSeverity.MEDIUM,
+    )
+    assert event.event_type == "rate_limit_exceeded"
+    assert event.severity == "medium"
+    assert event.status == "blocked"
+    assert event.created_at is not None
+    assert event.created_at.tzinfo == timezone.utc
+    assert event.details is None
+    assert event.user_id is None
+    assert event.device_id is None
+    assert event.request_id is None
+    assert event.metadata_json is None
+
+
+def test_security_event_validation_enums_and_taxonomy():
+    """
+    Verify validates decorators enforce controlled event_type, severity, and status.
+    """
+    # Valid event types
+    for event_type in VALID_SECURITY_EVENT_TYPES:
+        ev = SecurityEvent(event_type=event_type, severity=SecurityEventSeverity.LOW)
+        assert ev.event_type == event_type
+
+    # Invalid event types
+    for invalid in ["unknown_type", "biometric_hack", "ACCESS_DENIED", "", None]:
+        with pytest.raises(ValueError, match="Invalid security event_type"):
+            SecurityEvent(event_type=invalid, severity=SecurityEventSeverity.LOW)
+
+    # Valid severities
+    for severity in VALID_SECURITY_EVENT_SEVERITIES:
+        ev = SecurityEvent(event_type=SecurityEventType.ADMIN_ACTION, severity=severity)
+        assert ev.severity == severity
+
+    # Invalid severities
+    for invalid in ["catastrophic", "urgent", "info", "", None]:
+        with pytest.raises(ValueError, match="Invalid security severity"):
+            SecurityEvent(event_type=SecurityEventType.ADMIN_ACTION, severity=invalid)
+
+    # Valid statuses
+    for status in VALID_SECURITY_EVENT_STATUSES:
+        ev = SecurityEvent(
+            event_type=SecurityEventType.ADMIN_ACTION,
+            severity=SecurityEventSeverity.LOW,
+            status=status,
+        )
+        assert ev.status == status
+
+    # Invalid statuses
+    for invalid in ["pending", "ignored", "in_progress", "", None]:
+        with pytest.raises(ValueError, match="Invalid security status"):
+            SecurityEvent(
+                event_type=SecurityEventType.ADMIN_ACTION,
+                severity=SecurityEventSeverity.LOW,
+                status=invalid,
+            )
+
+
+def test_security_event_length_bounds_and_metadata_validation():
+    """
+    Verify length boundaries on string columns and safe JSON metadata parsing.
+    """
+    # details boundary (<=255)
+    with pytest.raises(ValueError, match="details must not exceed 255 characters"):
+        SecurityEvent(
+            event_type=SecurityEventType.SUSPICIOUS_PAYLOAD,
+            severity=SecurityEventSeverity.HIGH,
+            details="X" * 256,
+        )
+
+    # user_id boundary (<=128)
+    with pytest.raises(ValueError, match="user_id must not exceed 128 characters"):
+        SecurityEvent(
+            event_type=SecurityEventType.UNAUTHORIZED_ACCESS,
+            severity=SecurityEventSeverity.HIGH,
+            user_id="U" * 129,
+        )
+
+    # device_id boundary (<=64)
+    with pytest.raises(ValueError, match="device_id must not exceed 64 characters"):
+        SecurityEvent(
+            event_type=SecurityEventType.HMAC_SIGNATURE_INVALID,
+            severity=SecurityEventSeverity.HIGH,
+            device_id="D" * 65,
+        )
+
+    # request_id boundary (<=64)
+    with pytest.raises(ValueError, match="request_id must not exceed 64 characters"):
+        SecurityEvent(
+            event_type=SecurityEventType.PAYLOAD_TOO_LARGE,
+            severity=SecurityEventSeverity.LOW,
+            request_id="R" * 65,
+        )
+
+    # metadata_json boundary (<=2048)
+    with pytest.raises(ValueError, match="metadata_json must not exceed 2048 characters"):
+        large_meta = {"note": "A" * 2050}
+        SecurityEvent(
+            event_type=SecurityEventType.ADMIN_ACTION,
+            severity=SecurityEventSeverity.LOW,
+            metadata_json=large_meta,
+        )
+
+    # Invalid JSON string
+    with pytest.raises(ValueError, match="metadata_json must be valid JSON"):
+        SecurityEvent(
+            event_type=SecurityEventType.ADMIN_ACTION,
+            severity=SecurityEventSeverity.LOW,
+            metadata_json="not-a-json-string{",
+        )
+
+    # JSON not an object
+    with pytest.raises(ValueError, match="metadata_json must represent a JSON object"):
+        SecurityEvent(
+            event_type=SecurityEventType.ADMIN_ACTION,
+            severity=SecurityEventSeverity.LOW,
+            metadata_json="[1, 2, 3]",
+        )
+
+    # Valid dict metadata serialization
+    ev = SecurityEvent(
+        event_type=SecurityEventType.ADMIN_ACTION,
+        severity=SecurityEventSeverity.LOW,
+        metadata_json={"action": "device_revoked", "reason": "routine_rotation"},
+    )
+    assert "device_revoked" in ev.metadata_json
+
+
+def test_security_event_prohibited_metadata_keys():
+    """
+    Verify strict data minimization: prohibited sensitive keys in metadata_json raise ValueError.
+    """
+    for forbidden in [
+        "token", "password", "secret", "secret_hash", "key",
+        "hmac_key", "signature", "audio", "embedding",
+        "similarity", "similarity_score", "ip", "client_ip", "user_agent"
+    ]:
+        with pytest.raises(ValueError, match="contains prohibited sensitive key"):
+            SecurityEvent(
+                event_type=SecurityEventType.SUSPICIOUS_PAYLOAD,
+                severity=SecurityEventSeverity.HIGH,
+                metadata_json={forbidden: "sensitive_val"},
+            )
+
+
+def test_security_events_schema_migration_and_constraints(monkeypatch):
+    """
+    Verify security_events table creation via Alembic, schema metadata (columns,
+    composite and single indexes, foreign keys), ORM query execution, and single-revision
+    rollback (ea5fe481812c -> d0199d309a47).
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        # 1. Migrate to head (runs all migrations including create_security_events_table)
+        command.upgrade(alembic_cfg, "head")
+
+        engine = create_db_engine(disposable_url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        assert "security_events" in tables
+        assert "verification_events" in tables
+        assert "speakers" in tables
+        assert "devices" in tables
+
+        # 2. Verify column definitions
+        columns = {col["name"]: col for col in inspector.get_columns("security_events")}
+        assert "id" in columns
+        assert "created_at" in columns
+        assert "event_type" in columns
+        assert "severity" in columns
+        assert "status" in columns
+        assert "details" in columns
+        assert "user_id" in columns
+        assert "device_id" in columns
+        assert "request_id" in columns
+        assert "metadata_json" in columns
+
+        # 3. Verify indexes (single-column and composite)
+        indexes = {idx["name"]: idx for idx in inspector.get_indexes("security_events")}
+        assert "ix_security_events_created_at" in indexes
+        assert "ix_security_events_event_type" in indexes
+        assert "ix_security_events_severity" in indexes
+        assert "ix_security_events_user_id" in indexes
+        assert "ix_security_events_device_id" in indexes
+        assert "ix_security_events_request_id" in indexes
+        assert "ix_security_events_created_severity" in indexes
+        assert indexes["ix_security_events_created_severity"]["column_names"] == ["created_at", "severity"]
+        assert "ix_security_events_created_type" in indexes
+        assert indexes["ix_security_events_created_type"]["column_names"] == ["created_at", "event_type"]
+
+        # 4. Verify foreign key definitions
+        fks = inspector.get_foreign_keys("security_events")
+        referred_tables = {fk["referred_table"]: fk for fk in fks}
+        assert "devices" in referred_tables
+        assert referred_tables["devices"]["referred_columns"] == ["device_id"]
+        engine.dispose()
+
+        # 5. Insert security events across severities and types
+        with get_db_context() as session:
+            device = DeviceRecord(device_id="esp32-sec-test-01", name="Security Terminal", secret_hash="hash")
+            session.add(device)
+            session.flush()
+
+            events = [
+                SecurityEvent(
+                    event_type=SecurityEventType.HMAC_NONCE_REPLAY,
+                    severity=SecurityEventSeverity.CRITICAL,
+                    status=SecurityEventStatus.BLOCKED,
+                    device_id="esp32-sec-test-01",
+                    request_id="req-sec-01",
+                    details="Replay attempt detected for nonce abc-123",
+                ),
+                SecurityEvent(
+                    event_type=SecurityEventType.RATE_LIMIT_EXCEEDED,
+                    severity=SecurityEventSeverity.MEDIUM,
+                    status=SecurityEventStatus.BLOCKED,
+                    user_id="firebase_user_rate",
+                    request_id="req-sec-02",
+                    details="Rate limit exceeded on /verify endpoint",
+                ),
+                SecurityEvent(
+                    event_type=SecurityEventType.UNKNOWN_DEVICE_REJECTED,
+                    severity=SecurityEventSeverity.HIGH,
+                    status=SecurityEventStatus.BLOCKED,
+                    request_id="req-sec-03",
+                    details="Unknown hardware terminal rejected",
+                ),
+                SecurityEvent(
+                    event_type=SecurityEventType.ADMIN_ACTION,
+                    severity=SecurityEventSeverity.LOW,
+                    status=SecurityEventStatus.LOGGED,
+                    user_id="firebase_admin_01",
+                    request_id="req-sec-04",
+                    details="Admin viewed audit log",
+                ),
+            ]
+            session.add_all(events)
+
+        # 6. Query back using composite time-window index and single filters
+        with get_db_context() as session:
+            all_events = session.scalars(select(SecurityEvent)).all()
+            assert len(all_events) == 4
+
+            # Filter by severity
+            critical_events = session.scalars(
+                select(SecurityEvent).where(SecurityEvent.severity == "critical")
+            ).all()
+            assert len(critical_events) == 1
+            assert critical_events[0].event_type == "hmac_nonce_replay"
+            assert critical_events[0].device_id == "esp32-sec-test-01"
+
+            # Filter by composite (created_at + severity)
+            now_utc = datetime.now(timezone.utc)
+            recent_high = session.scalars(
+                select(SecurityEvent).where(
+                    SecurityEvent.created_at <= now_utc,
+                    SecurityEvent.severity == "high",
+                )
+            ).all()
+            assert len(recent_high) == 1
+            assert recent_high[0].event_type == "unknown_device_rejected"
+
+            # Filter by composite (created_at + event_type)
+            rate_events = session.scalars(
+                select(SecurityEvent).where(
+                    SecurityEvent.created_at <= now_utc,
+                    SecurityEvent.event_type == "rate_limit_exceeded",
+                )
+            ).all()
+            assert len(rate_events) == 1
+            assert rate_events[0].user_id == "firebase_user_rate"
+
+        reset_engine()
+
+        # 7. Single-revision rollback (ea5fe481812c -> d0199d309a47)
+        command.downgrade(alembic_cfg, "d0199d309a47")
+
+        engine_rb = create_db_engine(disposable_url)
+        inspector_rb = inspect(engine_rb)
+        tables_rb = inspector_rb.get_table_names()
+        assert "security_events" not in tables_rb
+        # Prior tables must remain untouched
+        assert "verification_events" in tables_rb
+        assert "speakers" in tables_rb
+        assert "devices" in tables_rb
+        assert "user_speaker_mappings" in tables_rb
+        assert "schema_initializations" in tables_rb
+        engine_rb.dispose()
+
+        # 8. Re-apply upgrade to head
+        command.upgrade(alembic_cfg, "head")
+        engine_reup = create_db_engine(disposable_url)
+        tables_reup = inspect(engine_reup).get_table_names()
+        assert "security_events" in tables_reup
+        engine_reup.dispose()
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+def test_security_events_foreign_key_set_null_on_device_delete(monkeypatch):
+    """
+    Verify ondelete='SET NULL' semantics: When a device is deleted,
+    associated historical security audit records are strictly retained with
+    their device_id set to NULL, preserving the audit trail without retaining
+    orphaned foreign references.
+    """
+    from sqlalchemy import event
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_file:
+        tmp_db_path = Path(tmp_file.name)
+
+    disposable_url = f"sqlite:///{tmp_db_path}"
+    monkeypatch.setenv("DATABASE_URL", disposable_url)
+    reset_engine()
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini_path = project_root / "alembic.ini"
+    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg.set_main_option("sqlalchemy.url", disposable_url)
+
+    try:
+        command.upgrade(alembic_cfg, "head")
+
+        engine = get_engine()
+        @event.listens_for(engine, "connect")
+        def enable_sqlite_fks(dbapi_con, con_record):
+            cursor = dbapi_con.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        # 1. Create device and security event
+        with get_db_context() as session:
+            device = DeviceRecord(device_id="audit-sec-dev-01", name="Audit Terminal", secret_hash="hash")
+            session.add(device)
+            session.flush()
+
+            sec_event = SecurityEvent(
+                event_type=SecurityEventType.HMAC_TIMESTAMP_SKEW,
+                severity=SecurityEventSeverity.MEDIUM,
+                status=SecurityEventStatus.BLOCKED,
+                device_id="audit-sec-dev-01",
+                request_id="req-audit-sec-preserve",
+                details="Timestamp skewed by 400s",
+            )
+            session.add(sec_event)
+
+        # 2. Delete the device record
+        with get_db_context() as session:
+            dev = session.scalar(select(DeviceRecord).where(DeviceRecord.device_id == "audit-sec-dev-01"))
+            assert dev is not None
+            session.delete(dev)
+
+        # 3. Verify security event is preserved with device_id set to NULL
+        with get_db_context() as session:
+            ev = session.scalar(
+                select(SecurityEvent).where(
+                    SecurityEvent.request_id == "req-audit-sec-preserve"
+                )
+            )
+            assert ev is not None, "Security event must NOT be deleted when device is deleted"
+            assert ev.device_id is None, "device_id must be SET NULL upon device deletion"
+            assert ev.event_type == "hmac_timestamp_skew"
+            assert ev.severity == "medium"
+            assert ev.status == "blocked"
+            assert ev.details == "Timestamp skewed by 400s"
+            assert ev.created_at is not None
+
+    finally:
+        reset_engine()
+        if tmp_db_path.exists():
+            try:
+                tmp_db_path.unlink()
+            except OSError:
+                pass
+
+
+# ─── 8. Application Startup & Import Decoupling ────────────────────────────────
 
 def test_application_startup_without_live_database():
     """
