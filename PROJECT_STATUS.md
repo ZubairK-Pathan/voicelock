@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 3D.1 — Persistent Security Event Schema (Completed)  
+**Current Milestone:** Increment 4A — Production Containerization & Cloud Build Baseline (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Persistent security event schema and Alembic migration active, 286 backend automated tests passing in 7.38s, 31 frontend unit/integration tests passing in 157ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Production Dockerfile, .dockerignore, model pre-warming, and 290 backend automated tests passing in 6.86s, 31 frontend unit/integration tests passing in 162ms across 4 suites, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3D.1 defines the database model and Alembic migration for a persistent security-event journal (`security_events`), establishing a durable schema for enterprise security incidents, cryptographic anomalies, and access control violations, cleanly decoupled from routine biometric verification outcomes (`verification_events`). The `SecurityEvent` model in `app/db/base.py` enforces controlled taxonomies for event types (`rate_limit_exceeded`, `payload_too_large`, `hmac_nonce_replay`, `hmac_signature_invalid`, `hmac_timestamp_skew`, `unknown_device_rejected`, `revoked_device_blocked`, `device_key_invalid`, `auth_token_expired`, `auth_token_revoked`, `auth_token_invalid`, `unauthorized_access`, `unauthorized_speaker_claim`, `admin_action`, `suspicious_payload`), severities (`low`, `medium`, `high`, `critical`), and statuses (`blocked`, `detected`, `logged`, `resolved`). Strict data minimization and privacy policies are enforced at both schema and validation layers: zero persistence of raw audio, embeddings, similarity scores, bearer tokens, passwords, HMAC keys, signatures, or raw exception stack traces; client IP addresses and user-agents are excluded by default; optional structured metadata (`metadata_json`) is bounded to $\le 2048$ characters with proactive filtering preventing prohibited sensitive keys. Referential integrity enforces `ON DELETE SET NULL` on `device_id`, preserving security event history when terminals are deleted, while `user_id` stores external Firebase UID strings without local cascading deletion. Alembic migration `ea5fe481812c` (`down_revision = 'd0199d309a47'`) provisions the table, check constraints, single-column indexes, and composite indexes (`created_at` + `severity`, `created_at` + `event_type`) with symmetric rollback. Automated backend tests expanded to **286 tests passing in 7.38s** with zero regressions.
+Increment 4A establishes the production containerization and packaging baseline for VoiceLock Enterprise. The missing production dependency `firebase-admin>=7.0.0` was verified and added to `requirements.txt`. A minimal, hardened `Dockerfile` (Python 3.11-slim) was created enforcing unprivileged non-root execution (`voicelock` user, UID 10001), OS-level `ffmpeg` and `libsndfile1` installation for audio normalization, automated model cache pre-warming via `scripts/warmup_models.py` (pre-baking SpeechBrain ECAPA-TDNN and Vosk STT models into `/app/.model_cache/`), and container health checking probing `GET /`. A strict `.dockerignore` file prevents leakage of secrets (`firebase-credentials*.json`, `.env*`), biometric audio datasets (`processed_dataset/`, `recordings/`, `*.wav`), local databases, virtual environments, and developer machine symlinks. Dedicated automated test suite in `tests/test_containerization.py` verified all containerization and security invariants. Automated backend tests expanded to **290 tests passing in 6.86s** with zero regressions.
 
 
 ---
@@ -755,6 +755,30 @@ Increment 3D.1 defines the database model and Alembic migration for a persistent
   - Frontend test suite remains clean (**31/31 tests passing**, 0 lint warnings, build passing in 190ms).
   - ML sanity check verified (ECAPA-TDNN score: 0.8668).
 
+### Increment 4A: Production Containerization & Cloud Build Baseline (Completed)
+- **Production Packaging & Hardening (`Dockerfile`, `.dockerignore`, `requirements.txt`):**
+  - Added verified missing production dependency `firebase-admin>=7.0.0` to `requirements.txt`.
+  - Created production `Dockerfile` (Python 3.11-slim) with non-root security:
+    - Creates unprivileged group and user `voicelock` (UID 10001, GID 10001) and sets `USER voicelock`.
+    - Installs OS-level audio transcoding tools (`ffmpeg`, `libsndfile1`) and HTTP probe utilities (`curl`, `ca-certificates`).
+    - Leverages Docker layer caching: copies `requirements.txt` and installs dependencies prior to copying application source.
+    - Pre-warms biometric and speech recognition models during build via `scripts/warmup_models.py`, baking SpeechBrain ECAPA-TDNN (~68MB) and Vosk STT (~40MB) directly into `/app/.model_cache/` to ensure the container is self-contained without runtime download dependencies or broken host symlinks.
+    - Assigns `/app` ownership to `voicelock:voicelock`.
+    - Defines container `HEALTHCHECK` probing `GET /` (`curl -f http://localhost:8000/ || exit 1`) with 30s interval, 5s timeout, and 30s cold-start grace period.
+    - Runs production FastAPI application via `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+  - Created `.dockerignore` strictly excluding secrets (`firebase-credentials*.json`, `.env*`), raw audio datasets (`processed_dataset/`, `recordings/`, `*.wav`), local databases (`voicelock.db`, `*.sqlite*`), virtual environments (`.venv/`), `node_modules/`, local `.model_cache/` symlinks, and `frontend/` source (deployed separately to Static Web Apps).
+  - Created `scripts/warmup_models.py` automating model cache initialization during container image builds.
+- **Automated Verification:**
+  - Added dedicated test suite in `tests/test_containerization.py` (4 tests):
+    - `test_requirements_contains_production_dependencies`: verifies all core and production dependencies including `firebase-admin`.
+    - `test_dockerfile_security_and_runtime_conventions`: verifies base image, non-root user, ffmpeg installation, warmup script execution, health probe, and uvicorn CMD.
+    - `test_dockerignore_security_exclusions`: verifies all critical exclusions (credentials, audio, DBs, virtualenvs, local symlinks).
+    - `test_warmup_models_script_structure`: verifies execution and importability of `scripts/warmup_models.py`.
+  - Total automated backend test suite expanded from 286 to **290 tests passing in 6.86s**.
+  - Frontend test suite remains clean (**31/31 tests passing**, 0 lint warnings, clean production build in 189ms).
+  - Model warmup script verified locally (`scripts/warmup_models.py` exited with 0).
+  - Note: Docker daemon is currently offline on local macOS developer host; local image build remains unverified until Docker Desktop is started or built via GitHub Actions runner.
+
 ---
 
 ## 3. Verified Test Results
@@ -766,13 +790,14 @@ Increment 3D.1 defines the database model and Alembic migration for a persistent
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
 | **Verification Event Repository Suite** | `.venv/bin/pytest tests/test_verification_event_repository.py -v` | 0 | **13/13 tests PASSED in 0.85s** (Creation, caller rollback, retrieval, pagination, ordering, filters, [start, end) time window, count_events, count_by_outcome, input validations) |
+| **Containerization Suite** | `.venv/bin/pytest tests/test_containerization.py -v` | 0 | **4/4 tests PASSED in 0.42s** (Production dependencies, Dockerfile non-root & ffmpeg & healthcheck, .dockerignore exclusions, warmup script) |
 | **Database & Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **27/27 tests PASSED in 1.63s** (VerificationEvent and SecurityEvent models, bounded taxonomy validators, metadata privacy checks, migration ea5fe481812c upgrade/downgrade, composite indexes, ON DELETE SET NULL retention) |
 | **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **286/286 tests PASSED in 7.38s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **290/290 tests PASSED in 6.86s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -799,10 +824,10 @@ Increment 3D.1 defines the database model and Alembic migration for a persistent
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 3D.2: Security Event Repository**:
-1. Implement `SecurityEventRepository` in `app/repositories/security_event_repository.py` following caller-controlled transaction conventions.
-2. Implement methods for creating security events, paginated listing, severity and time-window filtering, and aggregate counts.
-3. Add dedicated unit tests for the repository.
+Proceed to **Increment 4B: Cloud CI/CD Automation (GitHub Actions to GHCR)**:
+1. Create `.github/workflows/deploy.yml` to automatically build, test, and push the backend container image to `ghcr.io/zubairk-pathan/voicelock-backend:latest` on push to `feature/enterprise-foundation`.
+2. Configure GitHub Actions secrets for Azure Container Apps and Azure Static Web Apps deployment.
+3. Keep cloud resource provisioning gated behind explicit operator approval.
 
 
 

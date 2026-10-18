@@ -1,0 +1,55 @@
+# Version control
+.git
+.gitignore
+
+# Environment & Credentials
+.env*
+firebase-credentials*.json
+*.pem
+*.key
+*.cert
+
+# Local virtual environments & dependencies
+.venv/
+venv/
+node_modules/
+frontend/node_modules/
+
+# Local databases & temporary state
+voicelock.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Audio recordings & raw datasets
+processed_dataset/
+recordings/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.aac
+
+# Local model cache & training outputs
+# (Pre-warmed cleanly during container image build via scripts/warmup_models.py
+# to avoid copying developer-specific local symlinks into the image)
+.model_cache/
+fine_tuned_model/
+results/
+
+# Python cache & test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Frontend source (Deployed separately to Azure Static Web Apps)
+frontend/
+
+# Developer tooling & OS metadata
+.gemini/
+.DS_Store
+*.swp
+*~

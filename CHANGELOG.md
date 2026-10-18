@@ -10,6 +10,13 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4A: Production Containerization & Cloud Build Baseline**
+  - Added verified missing production dependency `firebase-admin>=7.0.0` to `requirements.txt`.
+  - Created production `Dockerfile` (Python 3.11-slim, non-root execution as `voicelock`, `ffmpeg` and `libsndfile1` system packages, automated model cache pre-warming, container healthcheck probing `GET /`).
+  - Created `.dockerignore` strictly excluding credentials (`firebase-credentials*.json`, `.env*`), biometric audio datasets (`processed_dataset/`, `recordings/`, `*.wav`), local databases (`voicelock.db`, `*.sqlite*`), virtual environments (`.venv/`), node_modules, and frontend source (deployed separately to Static Web Apps).
+  - Created `scripts/warmup_models.py` to pre-download and validate SpeechBrain ECAPA-TDNN and Vosk STT models during container build, preventing runtime download dependencies or broken local symlinks.
+  - Added `tests/test_containerization.py` (4 automated tests) verifying Dockerfile instructions, non-root user enforcement, .dockerignore security exclusions, requirements.txt dependencies, and model warmup structure.
+  - Total automated backend test suite expanded from 286 to **290 tests passing in 6.86s**.
 - **Increment 3D.1: Persistent Security Event Schema**
   - Defined `SecurityEvent` model in `app/db/base.py` for persistent logging of enterprise security incidents, cryptographic anomalies, and access control violations, strictly separated from routine biometric verification outcomes (`VerificationEvent`).
   - Implemented controlled security taxonomy enums:

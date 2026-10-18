@@ -15,3 +15,4 @@ pytest
 sqlalchemy>=2.0.0
 alembic>=1.13.0
 psycopg[binary]>=3.1.0
+firebase-admin>=7.0.0
