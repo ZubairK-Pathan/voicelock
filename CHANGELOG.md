@@ -10,6 +10,19 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Milestone 4B: Firebase Authentication & Frontend Session Management**
+  - Integrated modular Firebase Web SDK in `frontend/src/lib/firebase.ts` with environment variable validation (`isFirebaseConfigured`).
+  - Added sanitized `frontend/.env.example` template with non-secret placeholders and updated `.gitignore` rules to guarantee `.env*` exclusion and `frontend/src/lib/` tracking.
+  - Implemented `AuthContext` and `useAuth` hook managing real-time auth states via `onAuthStateChanged`, token caching, and user-friendly error mappings.
+  - Built graceful local demonstration mode allowing evaluation of operator accounts (`admin@voicelock.internal`, `zubair@voicelock.internal`) when `.env.local` is missing.
+  - Implemented responsive `SignInPage` with VoiceLock Obsidian theme, password toggle, input validation, and an interactive Firebase Console setup guide.
+  - Integrated session state into `App.tsx` and `Header.tsx` displaying operator profile badge and Sign Out button.
+  - Created typed authenticated API client (`frontend/src/lib/apiClient.ts`) that fetches fresh ID tokens and attaches `Authorization: Bearer <ID_TOKEN>` with safe 401/403 handling.
+  - Added frontend unit test suite `frontend/src/lib/apiClient.test.ts` (6/6 passing in 22ms via Node 25 native test runner).
+  - Production build (`npm run build`) compiles cleanly in 153ms; linter (`oxlint`) passes with 0 errors and 0 warnings.
+  - Live dev server validated on `http://127.0.0.1:5173/` via automated browser testing.
+  - All 165 backend automated tests, ML evaluation, and calibration remain 100% passing.
+
 - **Milestone 4A: React Frontend Foundation and Dashboard Prototype**
   - Scaffolded modern standalone web client using React 19, TypeScript 6, and Vite 8 in `./frontend`.
   - Built bespoke enterprise dark mode design system (`frontend/src/index.css`) featuring custom CSS tokens, glassmorphism cards, Inter/JetBrains Mono typography, custom scrollbars, and accessible contrast.

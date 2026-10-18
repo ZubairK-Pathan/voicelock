@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "node --experimental-strip-types --test src/lib/apiClient.test.ts",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "^13.0.0",
     "lucide-react": "^1.59.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

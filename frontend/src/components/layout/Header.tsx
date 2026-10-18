@@ -1,6 +1,7 @@
 import React from 'react';
-import { Info, Radio, Database } from 'lucide-react';
+import { Info, Radio, Database, LogOut, User } from 'lucide-react';
 import type { NavigationTab } from '../../types';
+import { useAuth } from '../../context/useAuth';
 
 interface HeaderProps {
   activeTab: NavigationTab;
@@ -8,6 +9,8 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerification }) => {
+  const { user, signOut } = useAuth();
+
   const titles: Record<NavigationTab, { title: string; subtitle: string }> = {
     overview: {
       title: 'Operations Dashboard',
@@ -84,6 +87,52 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
             Postgres / SQLite
           </span>
         </div>
+
+        {/* Authenticated Principal Info */}
+        {user && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              background: 'rgba(14, 20, 34, 0.8)',
+              border: '1px solid var(--border-subtle)',
+              padding: '4px 10px 4px 6px',
+              borderRadius: 'var(--radius-sm)',
+            }}
+          >
+            <div
+              style={{
+                width: '26px',
+                height: '26px',
+                borderRadius: '50%',
+                background: user.role === 'admin' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <User size={14} color={user.role === 'admin' ? '#60A5FA' : '#34D399'} />
+            </div>
+            <div style={{ lineHeight: '1.2' }}>
+              <div className="text-xs font-semibold text-primary" style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user.displayName || user.email}
+              </div>
+              <div className="text-xs font-mono" style={{ color: user.role === 'admin' ? '#60A5FA' : '#34D399', fontSize: '10px' }}>
+                {user.role.toUpperCase()}
+              </div>
+            </div>
+            <button
+              onClick={() => signOut()}
+              title="Sign Out"
+              aria-label="Sign Out"
+              className="btn btn-secondary"
+              style={{ padding: '4px 6px', marginLeft: '4px', border: 'none', background: 'transparent' }}
+            >
+              <LogOut size={14} color="var(--text-muted)" />
+            </button>
+          </div>
+        )}
 
         {/* Quick action button */}
         {activeTab !== 'verification' && onOpenQuickVerification && (

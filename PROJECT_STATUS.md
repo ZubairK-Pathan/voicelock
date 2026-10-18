@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Milestone 4A — React Frontend Foundation and Dashboard Prototype (Completed)  
+**Current Milestone:** Milestone 4B — Firebase Authentication & Frontend Session Management (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Frontend Vite dev server active on http://127.0.0.1:5173, production build passing, 165 backend automated tests, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Frontend authentication and dashboard active on http://127.0.0.1:5173, production build passing, 6 frontend unit tests passing, 165 backend automated tests, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Milestone 4A delivers the first modern, polished React frontend for VoiceLock Enterprise alongside the existing FastAPI backend and Streamlit reference application. Scaffolded in `./frontend` with React 19, TypeScript 6, and Vite 8, the application features an enterprise security-operations console designed with dark-theme glassmorphism, Inter and JetBrains Mono typography, persistent sidebar navigation, and 5 operational pages: Operations Overview & Telemetry, Enrolled Speakers, Voice Verification Simulator (with dynamic challenge-response, countdown TTL, and multi-scenario biometric verdicts), Access Terminals (IoT ESP32 status and key versions), and Security Audit Log. All views are decoupled via a structured mock-data module with explicit prototype labelling. The production build (`npm run build`) compiles cleanly in under 200ms with zero linter errors, and the active local development server (`http://127.0.0.1:5173/`) has been visually verified in a browser session. All 165 backend tests and ML evaluation baselines continue passing without regressions.
+Milestone 4B integrates client-side Firebase Authentication and session management into the VoiceLock Enterprise React application (`frontend/`). Initialized via the modular Firebase Web SDK in `frontend/src/lib/firebase.ts`, the application manages authentication states using an `AuthProvider` with `onAuthStateChanged`, protecting dashboard routes against unauthenticated access and eliminating unauthorized dashboard flashes during session resolution. Unauthenticated operators are routed to a polished Obsidian-themed `SignInPage` featuring email/password inputs, password visibility toggle, client validation, accessible labels, and an interactive Firebase Console setup guide. For local development where web credentials are not yet provisioned, a graceful demonstration mode allows evaluating the authentication workflow with preset operator profiles (`admin@voicelock.internal`, `zubair@voicelock.internal`). Authenticated sessions display the operator identity and role pill (`ADMIN` / `USER`) in the top navigation bar with clean sign-out termination. A typed, standalone `ApiClient` (`frontend/src/lib/apiClient.ts`) was created to safely retrieve fresh RS256 Bearer ID tokens and attach them to protected backend requests (`Authorization: Bearer <ID_TOKEN>`) while shielding tokens from URLs and logs. Frontend unit tests verify token attachment and 401/403 security handling (6/6 passing in 22ms), `oxlint` passes with zero warnings, and all 165 backend automated tests continue passing without regression.
 
 
 ---
@@ -400,16 +400,46 @@ Milestone 4A delivers the first modern, polished React frontend for VoiceLock En
   - Development server running on `http://127.0.0.1:5173/`, verified live in a browser session across all 5 navigation views and modals.
   - Zero regressions on backend test suite: 165/165 tests passing.
 
+
+### Milestone 4B: Firebase Authentication & Frontend Session Management (Completed)
+- **Firebase Web SDK Architecture (`frontend/src/lib/firebase.ts`):**
+  - Modular client SDK integration loading web configuration via Vite environment variables (`VITE_FIREBASE_*`).
+  - Validation helper `isFirebaseConfigured()` preventing duplicate initialization and safely falling back to local demonstration mode when web configuration is unpopulated.
+  - Sanitized template created in `frontend/.env.example` with zero secrets committed.
+  - Root and frontend `.gitignore` updated to guarantee all local `.env*` files remain strictly excluded, while anchoring Python build rules so `frontend/src/lib/` is cleanly tracked.
+- **Session Management & Context (`frontend/src/context/`):**
+  - `AuthContext` and `useAuth` hook managing real-time auth state via `onAuthStateChanged`.
+  - Lazy initialization preventing flash of unauthorized dashboard content during session hydration.
+  - Safe mapping of Firebase error codes (`auth/invalid-credential`, `auth/wrong-password`, `auth/user-not-found`, `auth/user-disabled`, `auth/too-many-requests`) into user-friendly messages without leaking internal traces.
+  - Development demonstration mode enabling seamless local operator sign-in (`admin@voicelock.internal`, `zubair@voicelock.internal`) when `.env.local` is missing.
+- **Authentication UI (`frontend/src/components/auth/SignInPage.tsx`):**
+  - Responsive Obsidian-themed sign-in console with VoiceLock shield branding.
+  - Email and password inputs, password visibility toggle, accessible labels, autofocus, and form validation.
+  - Interactive Firebase Console setup guide with step-by-step instructions (authorized domains, provider activation, web app registration).
+  - Integrated into `Header.tsx` displaying the authenticated operator profile badge and Sign Out button.
+- **Authenticated API Client (`frontend/src/lib/apiClient.ts`):**
+  - Standalone typed HTTP client configured with base URL from `VITE_API_BASE_URL`.
+  - Automatically fetches fresh ID tokens via `user.getIdToken()` and attaches them as `Authorization: Bearer <ID_TOKEN>`.
+  - Safe error handling for 401 Unauthorized and 403 Forbidden without leaking tokens or logging secrets.
+  - Tested with dedicated unit tests in `frontend/src/lib/apiClient.test.ts` (6 tests passing).
+- **Engineering Quality & Verification:**
+  - `npm test` (Node 25 native test runner): **6/6 tests passed in 22ms**.
+  - `npm run lint` (`oxlint`): **0 warnings, 0 errors** across 21 files.
+  - `npm run build`: Production bundle compiled cleanly in 153ms.
+  - Live dev server validated on `http://127.0.0.1:5173/` via automated browser testing (login, toggle, setup guide, dashboard access, sign-out transition).
+  - Backend regression: **165/165 tests passing** in `pytest`.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 147ms** (dist/index.html, dist/assets/index.css, dist/assets/index.js) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 17 files |
+| **Frontend Unit Tests** | `npm test` (in `frontend/`) | 0 | **6/6 tests PASSED in 22ms** (Bearer token attachment, unauthenticated routes, error suppression, 401/403 safety, JSON parsing) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 21 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 153ms** (dist/index.html, dist/assets/index.css, dist/assets/index.js) |
 | **Frontend Live Dev Server** | `curl -I http://127.0.0.1:5173/` | 0 | **HTTP/1.1 200 OK** (Vite v8.3.4 ready in 95ms) |
-| **Browser UI Validation** | Automated browser subagent | 0 | **All 5 pages, search filters, challenge countdown, and modals verified** |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.63s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
+| **Browser Auth Validation** | Automated browser subagent | 0 | **Sign-in page, password toggle, setup guide, demo login, operator badge, and sign-out verified** |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **165/165 tests PASSED in 3.45s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 16 Database + 12 Device Repo + 12 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth) |
 | **Database Device Auth Suite**| `.venv/bin/pytest tests/test_device_auth_database.py -v` | 0 | **12/12 tests PASSED** |
 | **Device Repository Suite** | `.venv/bin/pytest tests/test_device_repository.py -v` | 0 | **12/12 tests PASSED** |
 | **Database Foundation Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **16/16 tests PASSED** |
@@ -428,8 +458,8 @@ Milestone 4A delivers the first modern, polished React frontend for VoiceLock En
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Frontend Prototype Mock Data Scope:**
-   - *Status:* In Milestone 4A, frontend data is mock-driven. Real backend API integration, Firebase token exchange, and browser audio recording are scheduled for subsequent milestones.
+1. **Frontend Development Demonstration Mode:**
+   - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 2. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with persistent storage (PostgreSQL/Redis) in Milestone 3C.4 (Shared Challenge & Rate Limit Storage).
@@ -444,11 +474,11 @@ Milestone 4A delivers the first modern, polished React frontend for VoiceLock En
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 4B: Firebase Authentication & Frontend Session Management**:
-1. Integrate Firebase Web SDK / Auth in the React frontend.
-2. Implement secure login / sign-in screen with role-aware routing.
-3. Manage user session state and RS256 Bearer ID tokens.
-4. Add authenticated API client service configured to attach Bearer tokens to protected backend routes (`/speakers`, `/verify`, `/identify`).
+Proceed to **Milestone 4C: Live Dashboard & Real Backend API Integration**:
+1. Connect `OverviewPage`, `SpeakersPage`, and `DevicesPage` to the FastAPI backend endpoints via `apiClient`.
+2. Connect `GET /speakers` to populate the speakers table with persistent database records.
+3. Wire `POST /challenge` and `POST /verify` to execute real biometric inference and Vosk liveness detection with browser audio uploads.
+4. Replace mock data with live operational state while maintaining graceful fallback and error boundaries.
 
 
 
