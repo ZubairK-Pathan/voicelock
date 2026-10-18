@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users,
   Cpu,
@@ -9,14 +9,12 @@ import {
   ShieldAlert,
   Sliders,
   Radio,
+  Database,
+  RefreshCw,
+  Lock,
 } from 'lucide-react';
 import { StatCard } from '../common/StatCard';
-import { Badge } from '../common/Badge';
-import {
-  MOCK_METRICS,
-  MOCK_VERIFICATION_RECORDS,
-  MOCK_SECURITY_EVENTS,
-} from '../../data/mockData';
+import { apiClient } from '../../lib/apiClient';
 import type { NavigationTab } from '../../types';
 
 interface OverviewPageProps {
@@ -24,10 +22,121 @@ interface OverviewPageProps {
 }
 
 export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
-  const recentVerifications = MOCK_VERIFICATION_RECORDS.slice(0, 5);
-  const criticalEvents = MOCK_SECURITY_EVENTS.filter(
-    (e) => e.severity === 'critical' || e.severity === 'high'
-  ).slice(0, 3);
+  const [speakersCount, setSpeakersCount] = useState<number | null>(null);
+  const [devicesCount, setDevicesCount] = useState<number | null>(null);
+  const [activeDevicesCount, setActiveDevicesCount] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [statusCode, setStatusCode] = useState<number | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  const handleRefresh = useCallback(() => {
+    setIsLoading(true);
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadTelemetry() {
+      setIsLoading(true);
+      setError(null);
+      setStatusCode(null);
+
+      try {
+        const [speakersRes, devicesRes] = await Promise.all([
+          apiClient.getSpeakers(),
+          apiClient.getDevices(),
+        ]);
+
+        if (ignore) return;
+
+        // Check for 401 Unauthorized
+        if (speakersRes.status === 401 || devicesRes.status === 401) {
+          setStatusCode(401);
+          setError(
+            'Your operator session has expired or is unauthenticated. Please re-authenticate to view live system metrics.'
+          );
+          setSpeakersCount(null);
+          setDevicesCount(null);
+          setActiveDevicesCount(null);
+          return;
+        }
+
+        // Check for 403 Forbidden
+        if (speakersRes.status === 403 || devicesRes.status === 403) {
+          setStatusCode(403);
+          setError(
+            'Administrative privileges are required to retrieve the enrolled speaker and hardware terminal registries. Non-administrative operators are restricted.'
+          );
+          setSpeakersCount(null);
+          setDevicesCount(null);
+          setActiveDevicesCount(null);
+          return;
+        }
+
+        // Check for success or error
+        if (speakersRes.ok && speakersRes.data) {
+          setSpeakersCount(speakersRes.data.count);
+        } else {
+          setSpeakersCount(null);
+        }
+
+        if (devicesRes.ok && devicesRes.data) {
+          setDevicesCount(devicesRes.data.total);
+          setActiveDevicesCount(devicesRes.data.active_count);
+        } else {
+          setDevicesCount(null);
+          setActiveDevicesCount(null);
+        }
+
+        if (!speakersRes.ok && !devicesRes.ok) {
+          setStatusCode(speakersRes.status || devicesRes.status);
+          setError(
+            speakersRes.error ||
+              devicesRes.error ||
+              'Failed to retrieve system metrics from the database backend.'
+          );
+        }
+      } catch {
+        if (!ignore) {
+          setStatusCode(0);
+          setError('Network communication failed while connecting to the VoiceLock API backend.');
+          setSpeakersCount(null);
+          setDevicesCount(null);
+          setActiveDevicesCount(null);
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadTelemetry();
+
+    return () => {
+      ignore = true;
+    };
+  }, [refreshTrigger]);
+
+  const getSpeakersSubtitle = () => {
+    if (isLoading) return 'Querying biometric registry...';
+    if (statusCode === 401) return 'Session unauthenticated';
+    if (statusCode === 403) return 'Admin authorization required';
+    if (speakersCount === null) return 'Registry unavailable';
+    if (speakersCount === 0) return '0 enrolled profiles (Database empty)';
+    return `${speakersCount} active biometric profiles in database`;
+  };
+
+  const getDevicesSubtitle = () => {
+    if (isLoading) return 'Querying terminal registry...';
+    if (statusCode === 401) return 'Session unauthenticated';
+    if (statusCode === 403) return 'Admin authorization required';
+    if (devicesCount === null) return 'Registry unavailable';
+    if (devicesCount === 0) return '0 terminals registered (Awaiting provisioning)';
+    return `${activeDevicesCount ?? 0} online of ${devicesCount} registered units`;
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -70,7 +179,18 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span className="badge badge-prototype">Prototype Mock Data</span>
+          <span className={`badge ${isLoading ? 'badge-suspended' : 'badge-active'} font-mono`}>
+            {isLoading ? 'Syncing...' : 'Live Engine Active'}
+          </span>
+          <button
+            onClick={handleRefresh}
+            className="btn btn-secondary"
+            style={{ fontSize: '12px', padding: '6px 12px' }}
+            title="Refresh live metrics"
+            disabled={isLoading}
+          >
+            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} /> Refresh
+          </button>
           <button
             onClick={() => onNavigate('verification')}
             className="btn btn-primary"
@@ -81,38 +201,99 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
         </div>
       </div>
 
+      {/* Error & Warning Banners */}
+      {error && (
+        <div
+          className="card"
+          style={{
+            padding: '14px 18px',
+            borderRadius: 'var(--radius-sm)',
+            borderLeft: `4px solid ${
+              statusCode === 401 ? '#F59E0B' : statusCode === 403 ? '#EF4444' : '#F87171'
+            }`,
+            background:
+              statusCode === 401
+                ? 'rgba(245, 158, 11, 0.08)'
+                : 'rgba(239, 68, 68, 0.08)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {statusCode === 401 ? (
+              <Lock size={18} color="#F59E0B" />
+            ) : statusCode === 403 ? (
+              <ShieldAlert size={18} color="#EF4444" />
+            ) : (
+              <AlertTriangle size={18} color="#F87171" />
+            )}
+            <div>
+              <div
+                className="text-sm font-semibold"
+                style={{
+                  color:
+                    statusCode === 401
+                      ? '#F59E0B'
+                      : statusCode === 403
+                      ? '#EF4444'
+                      : '#F87171',
+                }}
+              >
+                {statusCode === 401
+                  ? 'Authentication Expired'
+                  : statusCode === 403
+                  ? 'Administrative Access Restricted'
+                  : 'Backend Connection Error'}
+              </div>
+              <div className="text-xs text-secondary" style={{ marginTop: '2px' }}>
+                {error}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleRefresh}
+            className="btn btn-secondary"
+            style={{ fontSize: '12px', padding: '5px 12px' }}
+          >
+            Retry Query
+          </button>
+        </div>
+      )}
+
       {/* Primary Telemetry Grid */}
       <div className="stat-grid">
         <StatCard
           title="Registered Speakers"
-          value={MOCK_METRICS.total_speakers}
-          subtitle={`${MOCK_METRICS.active_speakers} active biometric profiles`}
+          value={isLoading ? '—' : speakersCount !== null ? speakersCount : '—'}
+          subtitle={getSpeakersSubtitle()}
           icon={<Users size={20} color="#3B82F6" />}
           iconBgColor="rgba(59, 130, 246, 0.15)"
-          trend={{ value: '+2 this month', isPositive: true }}
         />
         <StatCard
           title="Access Terminals"
-          value={MOCK_METRICS.total_devices}
-          subtitle={`${MOCK_METRICS.active_devices} online HMAC-SHA256 ESP32 units`}
+          value={isLoading ? '—' : devicesCount !== null ? devicesCount : '—'}
+          subtitle={getDevicesSubtitle()}
           icon={<Cpu size={20} color="#10B981" />}
           iconBgColor="rgba(16, 185, 129, 0.15)"
-          trend={{ value: '1 suspended', isPositive: false }}
         />
         <StatCard
           title="Verification Success Rate"
-          value={`${MOCK_METRICS.success_rate_percent}%`}
-          subtitle={`${MOCK_METRICS.verifications_today} attempts logged today`}
-          icon={<CheckCircle2 size={20} color="#34D399" />}
-          iconBgColor="rgba(52, 211, 153, 0.15)"
-          trend={{ value: '+1.2% vs baseline', isPositive: true }}
+          value="—"
+          subtitle="Audit log persistence not initialized"
+          icon={<CheckCircle2 size={20} color="#64748B" />}
+          iconBgColor="rgba(100, 116, 139, 0.15)"
+          trend={{ value: 'Telemetry Offline', isPositive: false }}
         />
         <StatCard
           title="Security Incidents"
-          value={MOCK_METRICS.critical_alerts}
-          subtitle="Replay & revoked device blocks"
-          icon={<AlertTriangle size={20} color="#EF4444" />}
-          iconBgColor="rgba(239, 68, 68, 0.15)"
+          value="—"
+          subtitle="Security event journal uninstrumented"
+          icon={<AlertTriangle size={20} color="#64748B" />}
+          iconBgColor="rgba(100, 116, 139, 0.15)"
+          trend={{ value: 'Telemetry Offline', isPositive: false }}
         />
       </div>
 
@@ -124,7 +305,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             <div>
               <h3 className="text-base font-semibold text-primary">Biometric Model Calibration</h3>
               <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
-                Statistical thresholding & cosine similarity distribution
+                Offline baseline calibration & decision boundary (SpeechBrain ECAPA-TDNN)
               </p>
             </div>
             <span className="badge badge-active font-mono">Calibrated</span>
@@ -166,6 +347,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
                 <div className="font-mono text-sm text-secondary">16,000 Hz Mono</div>
               </div>
             </div>
+
+            <div className="text-xs text-muted" style={{ lineHeight: '1.4' }}>
+              Calibrated against sentence-disjoint evaluation split. The server threshold is authoritative and cannot be lowered by client requests.
+            </div>
           </div>
         </div>
 
@@ -175,7 +360,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             <div>
               <h3 className="text-base font-semibold text-primary">Threat & Replay Monitoring</h3>
               <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
-                Latest security interventions and blocked attacks
+                Runtime security controls & incident telemetry
               </p>
             </div>
             <button
@@ -183,59 +368,70 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
               className="btn btn-secondary"
               style={{ fontSize: '11px', padding: '4px 10px' }}
             >
-              View Full Audit Log
+              View Audit Console
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {criticalEvents.map((event) => (
-              <div
-                key={event.id}
-                style={{
-                  padding: '12px',
-                  background: 'rgba(14, 20, 34, 0.5)',
-                  border: '1px solid rgba(255, 255, 255, 0.05)',
-                  borderRadius: 'var(--radius-sm)',
-                  display: 'flex',
-                  gap: '12px',
-                  alignItems: 'flex-start',
-                }}
-              >
-                <div style={{ marginTop: '2px' }}>
-                  {event.severity === 'critical' ? (
-                    <ShieldAlert size={16} color="#EF4444" />
-                  ) : (
-                    <AlertTriangle size={16} color="#F59E0B" />
-                  )}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                    <span className="font-mono text-xs font-semibold text-primary">
-                      {event.event_type}
-                    </span>
-                    <Badge value={event.severity} />
-                  </div>
-                  <p className="text-xs text-secondary" style={{ lineHeight: '1.4' }}>
-                    {event.details}
-                  </p>
-                  <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }} className="text-xs text-muted font-mono">
-                    <span>{event.timestamp}</span>
-                    <span>Source: {event.source}</span>
-                  </div>
-                </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div
+              style={{
+                padding: '12px',
+                background: 'rgba(14, 20, 34, 0.5)',
+                border: '1px solid rgba(255, 255, 255, 0.05)',
+                borderRadius: 'var(--radius-sm)',
+                display: 'flex',
+                gap: '12px',
+                alignItems: 'flex-start',
+              }}
+            >
+              <div style={{ marginTop: '2px' }}>
+                <ShieldCheck size={16} color="#34D399" />
               </div>
-            ))}
+              <div style={{ flex: 1 }}>
+                <div className="text-xs font-semibold text-primary">
+                  In-Memory Security Controls Active
+                </div>
+                <p className="text-xs text-secondary" style={{ marginTop: '2px', lineHeight: '1.4' }}>
+                  60-second CSPRNG digit challenges with atomic burn-on-use, sliding-window HMAC nonce verification, and ASGI upload size rate limits are actively enforced.
+                </p>
+              </div>
+            </div>
+
+            {/* Crucial Security Disclosure: Absence of events does not imply zero threat */}
+            <div
+              style={{
+                padding: '12px',
+                background: 'rgba(239, 68, 68, 0.06)',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                borderRadius: 'var(--radius-sm)',
+                display: 'flex',
+                gap: '12px',
+                alignItems: 'flex-start',
+              }}
+            >
+              <div style={{ marginTop: '2px' }}>
+                <ShieldAlert size={16} color="#F87171" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="text-xs font-semibold" style={{ color: '#F87171' }}>
+                  Security Disclosure: Event Journal Uninstrumented
+                </div>
+                <p className="text-xs text-secondary" style={{ marginTop: '2px', lineHeight: '1.4' }}>
+                  The absence of logged incidents reflects uninstrumented event storage in this increment, not the absence of attacks or verified zero-failure operations.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Recent Biometric Verifications Table */}
+      {/* Recent Biometric Access Attempts Table / Uninstrumented State */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
           <div>
             <h3 className="text-base font-semibold text-primary">Recent Biometric Access Attempts</h3>
             <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
-              Live verification stream across physical terminals
+              Live verification attempt streaming across physical terminals
             </p>
           </div>
           <button
@@ -247,55 +443,48 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </button>
         </div>
 
-        <div className="table-container">
-          <table className="enterprise-table">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Speaker Claim</th>
-                <th>Terminal</th>
-                <th>Cosine Similarity</th>
-                <th>Liveness Digits</th>
-                <th>Result</th>
-                <th>Latency</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentVerifications.map((row) => (
-                <tr key={row.id}>
-                  <td className="font-mono text-xs text-muted">{row.timestamp}</td>
-                  <td>
-                    <div className="font-semibold text-primary">{row.speaker_name}</div>
-                    <div className="text-xs text-muted font-mono">id: {row.speaker_id}</div>
-                  </td>
-                  <td>
-                    <div className="text-secondary">{row.device_name}</div>
-                    <div className="text-xs text-muted font-mono">{row.device_id}</div>
-                  </td>
-                  <td>
-                    <div className="font-mono font-semibold" style={{ color: row.similarity_score >= row.threshold ? '#34D399' : '#F87171' }}>
-                      {row.similarity_score.toFixed(4)}
-                    </div>
-                    <div className="text-xs text-muted font-mono">Threshold: {row.threshold.toFixed(2)}</div>
-                  </td>
-                  <td className="font-mono text-xs">
-                    <span style={{ letterSpacing: '0.15em', fontWeight: 600 }}>
-                      {row.liveness_digits}
-                    </span>
-                    <span style={{ marginLeft: '8px', color: row.liveness_pass ? '#34D399' : '#F87171' }}>
-                      {row.liveness_pass ? '✓ Pass' : '✗ Failed'}
-                    </span>
-                  </td>
-                  <td>
-                    <Badge value={row.result} />
-                  </td>
-                  <td className="font-mono text-xs text-muted">
-                    {row.latency_ms} ms
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div
+          style={{
+            padding: '36px 20px',
+            textAlign: 'center',
+            background: 'rgba(14, 20, 34, 0.3)',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px dashed rgba(255, 255, 255, 0.08)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '12px',
+          }}
+        >
+          <div
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '50%',
+              background: 'rgba(59, 130, 246, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#60A5FA',
+            }}
+          >
+            <Database size={22} />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-primary">
+              Biometric Access Journal Uninstrumented
+            </div>
+            <p className="text-xs text-secondary" style={{ maxWidth: '460px', margin: '4px auto 0', lineHeight: '1.5' }}>
+              Biometric verification attempts are evaluated in real time by the SpeechBrain ECAPA-TDNN model and Vosk STT engine. Persistent verification audit logs will be provisioned in an upcoming milestone.
+            </p>
+          </div>
+          <button
+            onClick={() => onNavigate('verification')}
+            className="btn btn-primary"
+            style={{ fontSize: '12px', padding: '6px 14px', marginTop: '4px' }}
+          >
+            Launch Verification Simulator
+          </button>
         </div>
       </div>
     </div>

@@ -47,6 +47,7 @@ class Permission(str, Enum):
     CHALLENGE_CREATE = "challenge:create"
     VERIFY_BIOMETRIC = "verify:biometric"
     IDENTIFY_BIOMETRIC = "identify:biometric"
+    DEVICES_LIST = "devices:list"
 
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -71,6 +72,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.CHALLENGE_CREATE,
         Permission.VERIFY_BIOMETRIC,
         Permission.IDENTIFY_BIOMETRIC,
+        Permission.DEVICES_LIST,
     },
 }
 
@@ -98,6 +100,13 @@ ENDPOINT_POLICIES: list[EndpointPolicy] = [
         auth_scheme=AuthScheme.FIREBASE_JWT,
         required_permissions=[Permission.SPEAKERS_LIST],
         description="Enrolled speaker directory. Restricted to Admin to prevent user enumeration.",
+    ),
+    EndpointPolicy(
+        path="/devices",
+        method="GET",
+        auth_scheme=AuthScheme.FIREBASE_JWT,
+        required_permissions=[Permission.DEVICES_LIST],
+        description="Enrolled hardware terminal directory. Restricted to Admin.",
     ),
     EndpointPolicy(
         path="/challenge",

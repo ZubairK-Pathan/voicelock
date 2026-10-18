@@ -71,6 +71,12 @@ def test_endpoint_policy_discovery():
     assert Permission.SPEAKERS_LIST in speakers_policy.required_permissions
     assert not is_public_endpoint("/speakers", "GET")
 
+    devices_policy = get_endpoint_policy("/devices", "GET")
+    assert devices_policy is not None
+    assert devices_policy.auth_scheme == AuthScheme.FIREBASE_JWT
+    assert Permission.DEVICES_LIST in devices_policy.required_permissions
+    assert not is_public_endpoint("/devices", "GET")
+
     verify_policy = get_endpoint_policy("/verify", "POST")
     assert verify_policy is not None
     assert verify_policy.auth_scheme == AuthScheme.EITHER

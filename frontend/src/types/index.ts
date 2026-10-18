@@ -7,6 +7,19 @@ export interface SpeakersApiResponse {
   count: number;
 }
 
+export interface DeviceSummaryItem {
+  device_id: string;
+  name: string | null;
+  status: EntityStatus;
+  key_version: number;
+}
+
+export interface DevicesApiResponse {
+  devices: DeviceSummaryItem[];
+  total: number;
+  active_count: number;
+}
+
 export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface Speaker {

@@ -10,6 +10,25 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 3B: Overview Dashboard Real Backend Metrics Integration**
+  - Replaced hardcoded `MOCK_METRICS`, `MOCK_VERIFICATION_RECORDS`, and `MOCK_SECURITY_EVENTS` in `frontend/src/components/pages/OverviewPage.tsx` with live database-backed metrics and honest uninstrumented states.
+  - Implemented `app/api/routes_devices.py` (`GET /devices`) with strict administrative RBAC (`get_current_admin`, `check_revoked=True`), providing real access terminal counts (`total`, `active_count`) from `DeviceRepository(db)` while strictly minimizing data (excluding `secret_hash`, raw keys, and credentials).
+  - Updated `app/core/auth_policy.py` declaring `Permission.DEVICES_LIST` and assigning it to `Role.ADMIN`.
+  - Added typed `getDevices()` method and `DevicesApiResponse` in `frontend/src/lib/apiClient.ts` and `frontend/src/types/index.ts`.
+  - Refactored `OverviewPage.tsx`:
+    - Enrolled Speakers: Displays live database speaker count via `GET /speakers` with honest status descriptions (querying, database empty, active profiles in database, admin restricted, unauthenticated).
+    - Access Terminals: Displays live database terminal count via `GET /devices` with honest status descriptions (querying, awaiting provisioning, online of registered units, admin restricted, unauthenticated).
+    - Verification Success Rate: Honestly displays `—` ("Audit log persistence not initialized") with `Telemetry Offline` status badge.
+    - Security Incidents: Honestly displays `—` ("Security event journal uninstrumented") with `Telemetry Offline` status badge.
+    - Added explicit Security Disclosure Notice informing operators that zero displayed incidents reflects uninstrumented telemetry rather than zero attacks or perfect security.
+    - Replaced fake verification records table with honest "Biometric Access Journal Uninstrumented" empty state pointing to the interactive verification simulator.
+    - Retained verified biometric model calibration parameters (0.2500 threshold, 0.8136 genuine mean, 0.2520 worst impostor, 192-d ECAPA, 16kHz mono).
+  - Updated `App.tsx`, `Layout.tsx`, and `Sidebar.tsx` to dynamically load live counts for sidebar badges, eliminating mock count fallbacks.
+  - Added 8 backend automated tests in `tests/test_devices_api.py` covering admin RBAC, data minimization, status filtering, unauthenticated requests, forbidden users, and database error handling.
+  - Added 8 frontend automated tests in `frontend/src/lib/overviewMetrics.test.ts` covering real metric loading, data minimization, 401/403/500/network error states, empty database handling, and zero-mock invariant compliance.
+  - Full automated backend suite expanded from 226 to **234 tests passing in 5.31s**.
+  - Total frontend automated suite expanded from 15 to **23 tests passing in 154ms**.
+  - Verified 0 warnings and 0 errors across 26 frontend files via `oxlint`; production build compiled cleanly in 173ms.
 - **Increment 3A: React Speakers Page Real API Integration**
   - Connected `frontend/src/components/pages/SpeakersPage.tsx` directly to the live FastAPI `GET /speakers` endpoint via `apiClient.getSpeakers()`.
   - Reused the existing Firebase ID token provider in `App.tsx` and `apiClient.ts` to attach `Authorization: Bearer <ID_TOKEN>` headers.

@@ -6,7 +6,7 @@
  * Never exposes tokens in URLs, query strings, or debug logs.
  */
 
-import type { SpeakersApiResponse } from '../types';
+import type { SpeakersApiResponse, DevicesApiResponse } from '../types';
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -147,6 +147,10 @@ export class ApiClient {
 
   public getSpeakers(options?: RequestInit & { requiresAuth?: boolean }) {
     return this.get<SpeakersApiResponse>('/speakers', options);
+  }
+
+  public getDevices(options?: RequestInit & { requiresAuth?: boolean }) {
+    return this.get<DevicesApiResponse>('/devices', options);
   }
 
   public post<T = unknown>(

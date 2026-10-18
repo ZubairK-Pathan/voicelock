@@ -7,9 +7,9 @@ interface LayoutProps {
   activeTab: NavigationTab;
   onTabChange: (tab: NavigationTab) => void;
   counts: {
-    speakers: number;
-    devices: number;
-    alerts: number;
+    speakers?: number;
+    devices?: number;
+    alerts?: number;
   };
   children: React.ReactNode;
 }

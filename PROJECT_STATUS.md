@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 18, 2026  
-**Current Milestone:** Increment 3A — React Speakers Page Real API Integration (Completed)  
+**Last Updated:** October 19, 2026  
+**Current Milestone:** Increment 3B — Overview Dashboard Real Backend Metrics Integration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Real database-backed speaker registry connected to React frontend, 226 backend automated tests passing in 5.26s, 15 frontend unit/integration tests passing in 142ms, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Real database-backed speaker and terminal metrics connected to React Overview dashboard, uninstrumented event streams displayed honestly, 234 backend automated tests passing in 5.31s, 23 frontend unit/integration tests passing in 154ms, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 3A connects the frontend React `SpeakersPage` (`frontend/src/components/pages/SpeakersPage.tsx`) to the live FastAPI `GET /speakers` endpoint, completely retiring hardcoded mock records (`MOCK_SPEAKERS`). The page dynamically retrieves the active speaker registry via `apiClient.getSpeakers()`, attaching the authenticated operator's Firebase ID token via `Authorization: Bearer <ID_TOKEN>`. The UI strictly conforms to the backend response schema (`registered_speakers: string[]`, `count: number`), presenting verified enrolled speaker identities alongside active biometric status and ECAPA-TDNN architecture metadata while omitting fabricated departments, mock sample counts, and fake enrollment timestamps. The implementation introduces robust state machines covering asynchronous data loading, empty database states, search-filtered empty states, and user-friendly error banners for HTTP 401 Unauthorized, HTTP 403 Forbidden (administrative RBAC boundary), and HTTP 500/network failures with retry actions. The frontend test suite expanded from 6 to **15 automated tests passing in 142ms** (`frontend/src/lib/speakersService.test.ts`), verifying token attachment, data loading, error handling, search filtering, and zero-mock invariant compliance with zero backend regressions (226/226 backend tests passing).
+Increment 3B connects the React `OverviewPage` (`frontend/src/components/pages/OverviewPage.tsx`) and application layout navigation (`App.tsx`, `Sidebar.tsx`) to live backend database metrics, retiring hardcoded mock records (`MOCK_METRICS`, `MOCK_VERIFICATION_RECORDS`, `MOCK_SECURITY_EVENTS`). The dashboard retrieves real speaker enrollment counts from `apiClient.getSpeakers()` and real access terminal counts from a newly implemented administrative endpoint `GET /devices` (`app/api/routes_devices.py`) backed by `DeviceRepository(db)`. The endpoint enforces strict role-based access control (`Role.ADMIN` with `check_revoked=True`) and data minimization, strictly omitting cryptographic hashes (`secret_hash`), credentials, tokens, and biometric vectors. For metrics lacking persisted database models or event logs (Verification Success Rate, Security Incidents, and recent verification history), the dashboard presents honest unavailable states (`—`, "Audit log persistence not initialized", "Biometric Access Journal Uninstrumented") alongside an explicit Security Disclosure Notice clarifying that the absence of logged incidents indicates uninstrumented event storage rather than zero threat activity or verified zero-failure operations. Zero mock data is rendered in production. The automated test suite expanded to **234 backend tests passing in 5.31s** and **23 frontend tests passing in 154ms** with zero linter warnings and clean production builds.
 
 
 ---
@@ -501,20 +501,46 @@ Increment 3A connects the frontend React `SpeakersPage` (`frontend/src/component
   - Frontend linter (`npm run lint`) reported **0 warnings and 0 errors** across 25 files.
   - Backend automated test suite remains 100% passing (**226/226 tests passing in 5.26s**).
 
+### Increment 3B: Overview Dashboard Real Backend Metrics Integration (Completed)
+- **Frontend Real Telemetry & State Management (`frontend/src/components/pages/OverviewPage.tsx`):**
+  - Replaced hardcoded `MOCK_METRICS`, `MOCK_VERIFICATION_RECORDS`, and `MOCK_SECURITY_EVENTS` with dynamic queries to live backend endpoints via `apiClient.getSpeakers()` and `apiClient.getDevices()`.
+  - Registered Speakers card dynamically renders live database count (`count`), displaying appropriate state messages: loading ("Querying biometric registry..."), empty database ("0 enrolled profiles (Database empty)"), unauthenticated ("Session unauthenticated"), or administrative restricted ("Admin authorization required"). Omitted fabricated monthly trend.
+  - Access Terminals card connects to live hardware device registry via `GET /devices`, displaying total and active online counts (`${active} online of ${total} registered units`) or clean awaiting provisioning status ("0 terminals registered (Awaiting provisioning)"). Omitted fabricated suspended trend.
+  - Verification Success Rate honestly renders uninstrumented state (`—`, "Audit log persistence not initialized") with a `Telemetry Offline` status badge.
+  - Security Incidents honestly renders uninstrumented state (`—`, "Security event journal uninstrumented") with a `Telemetry Offline` status badge.
+  - Added an explicit **Security Disclosure Notice** clarifying that the absence of logged incidents indicates uninstrumented event storage rather than zero threat activity or zero-failure operation.
+  - Replaced simulated verification attempt rows with an honest "Biometric Access Journal Uninstrumented" empty-state panel pointing operators to the interactive verification console.
+  - Biometric Model Calibration card cleanly presents verified offline baseline parameters (0.2500 server threshold, 0.8136 genuine mean, 0.2520 worst impostor, 192-d ECAPA, 16kHz mono).
+- **Backend Terminal Registry Endpoint (`app/api/routes_devices.py`):**
+  - Implemented `GET /devices` endpoint querying `DeviceRepository(db)` for `list_devices()`, `count()`, and `count(status="active")`.
+  - Strict administrative authorization: enforced via `get_current_admin` (`Role.ADMIN` with `check_revoked=True`). Ordinary users are rejected with HTTP 403 Forbidden.
+  - Strict data minimization: `secret_hash`, raw secrets, and tokens are completely excluded from the response schema (`DeviceItem`, `DevicesResponse`).
+  - Declared `Permission.DEVICES_LIST` and registered route policy in `app/core/auth_policy.py`.
+- **Top-Level Navigation Telemetry Sync (`frontend/src/App.tsx`, `Layout.tsx`, `Sidebar.tsx`):**
+  - Updated `App.tsx` to dynamically query live speaker and device counts for sidebar badges, eliminating mock count fallbacks.
+  - Updated `SidebarProps` and `LayoutProps` to support optional telemetry counts without rendering false badges.
+- **Automated Verification:**
+  - Added `tests/test_devices_api.py` (8 backend tests) verifying admin RBAC, data minimization, status filtering, unauthenticated requests, forbidden users, and database error handling.
+  - Added `frontend/src/lib/overviewMetrics.test.ts` (8 frontend tests) verifying real metric loading, data minimization, 401/403/500/network error states, empty database handling, and zero-mock invariant compliance.
+  - Total backend automated test suite expanded from 226 to **234 tests passing in 5.31s**.
+  - Total frontend automated test suite expanded from 15 to **23 tests passing in 154ms**.
+  - Frontend production build (`npm run build`) passed cleanly in 173ms with **0 warnings and 0 errors** on 26 files in `oxlint`.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **15/15 tests PASSED in 142ms** (Bearer token attachment, unauthenticated routes, 401/403 safety, real API loading, empty database, search filtering, zero-mock invariant) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 25 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 98ms** |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **23/23 tests PASSED in 154ms** (Bearer token attachment, real speaker/device loading, empty database, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 173ms** |
+| **Devices API Suite** | `.venv/bin/pytest tests/test_devices_api.py -v` | 0 | **8/8 tests PASSED in 0.67s** (Admin RBAC, data minimization secret exclusion, status counts, 401/403 safety, DB error handling) |
 | **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
 | **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **226/226 tests PASSED in 5.26s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **234/234 tests PASSED in 5.31s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |
@@ -540,11 +566,10 @@ Increment 3A connects the frontend React `SpeakersPage` (`frontend/src/component
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Milestone 4C: Live Dashboard & Real Backend API Integration**:
-1. Connect `OverviewPage`, `SpeakersPage`, and `DevicesPage` to the FastAPI backend endpoints via `apiClient`.
-2. Connect `GET /speakers` to populate the speakers table with persistent database records.
-3. Wire `POST /challenge` and `POST /verify` to execute real biometric inference and Vosk liveness detection with browser audio uploads.
-4. Replace mock data with live operational state while maintaining graceful fallback and error boundaries.
+Proceed to **Increment 3C / Milestone 4C: Devices Page Live API & Interactive Verification Integration**:
+1. Connect `DevicesPage` to the newly established `GET /devices` endpoint via `apiClient.getDevices()`.
+2. Wire `POST /challenge` and `POST /verify` to execute real biometric inference and Vosk liveness detection with browser audio recordings.
+3. Establish persistent verification log tables and event journal storage in future database increments.
 
 
 

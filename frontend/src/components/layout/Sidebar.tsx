@@ -15,9 +15,9 @@ interface SidebarProps {
   activeTab: NavigationTab;
   onTabChange: (tab: NavigationTab) => void;
   counts: {
-    speakers: number;
-    devices: number;
-    alerts: number;
+    speakers?: number;
+    devices?: number;
+    alerts?: number;
   };
 }
 
@@ -53,7 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'events' as NavigationTab,
       label: 'Security Audit Log',
       icon: <ShieldAlert size={18} />,
-      badge: counts.alerts > 0 ? counts.alerts : undefined,
+      badge: counts.alerts !== undefined && counts.alerts > 0 ? counts.alerts : undefined,
       badgeColor: '#EF4444',
     },
   ];

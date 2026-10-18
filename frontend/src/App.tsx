@@ -10,17 +10,52 @@ import { VerificationPage } from './components/pages/VerificationPage';
 import { DevicesPage } from './components/pages/DevicesPage';
 import { SecurityEventsPage } from './components/pages/SecurityEventsPage';
 import type { NavigationTab } from './types';
-import { MOCK_METRICS } from './data/mockData';
 import { apiClient } from './lib/apiClient';
 
 function DashboardApp() {
   const { user, loading, getIdToken } = useAuth();
   const [activeTab, setActiveTab] = useState<NavigationTab>('overview');
+  const [counts, setCounts] = useState<{
+    speakers?: number;
+    devices?: number;
+    alerts?: number;
+  }>({});
 
   // Bind token provider to ApiClient so authenticated requests attach Bearer tokens
   useEffect(() => {
     apiClient.setTokenProvider(getIdToken);
   }, [getIdToken]);
+
+  // Load live telemetry counts when authenticated
+  useEffect(() => {
+    if (!user) return;
+    let ignore = false;
+
+    async function loadTelemetryCounts() {
+      try {
+        const [speakersRes, devicesRes] = await Promise.all([
+          apiClient.getSpeakers(),
+          apiClient.getDevices(),
+        ]);
+        if (ignore) return;
+        setCounts({
+          speakers: speakersRes.ok && speakersRes.data ? speakersRes.data.count : undefined,
+          devices: devicesRes.ok && devicesRes.data ? devicesRes.data.total : undefined,
+          alerts: undefined,
+        });
+      } catch {
+        if (!ignore) {
+          setCounts({});
+        }
+      }
+    }
+
+    loadTelemetryCounts();
+
+    return () => {
+      ignore = true;
+    };
+  }, [user]);
 
   // Loading state preventing flash of dashboard
   if (loading) {
@@ -66,12 +101,6 @@ function DashboardApp() {
   if (!user) {
     return <SignInPage />;
   }
-
-  const counts = {
-    speakers: MOCK_METRICS.total_speakers,
-    devices: MOCK_METRICS.total_devices,
-    alerts: MOCK_METRICS.critical_alerts,
-  };
 
   const renderActivePage = () => {
     switch (activeTab) {
