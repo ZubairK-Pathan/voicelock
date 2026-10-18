@@ -16,7 +16,17 @@ from app.core.middleware import RequestSizeLimiterMiddleware, PayloadTooLargeErr
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Pre-warm ML models and voiceprint profiles at startup."""
-    get_system()
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    # Pre-warm ML embedding model singleton
+    from app.services.speaker_service import get_classifier
+    get_classifier()
+    # Attempt to pre-warm speaker profiles if database is initialized and accessible
+    try:
+        get_system()
+        logger.info("VoiceLock speaker profiles pre-warmed successfully from database.")
+    except Exception as exc:
+        logger.warning("VoiceLock initial database profile pre-warm deferred: %s", exc)
     yield
 
 

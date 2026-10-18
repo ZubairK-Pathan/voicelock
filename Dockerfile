@@ -26,8 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -g 10001 voicelock && \
     useradd -u 10001 -g voicelock -s /bin/bash -m voicelock
 
-# Set application working directory
+# Set application working directory and HuggingFace cache directory
 WORKDIR /app
+ENV HF_HOME=/home/voicelock/.cache/huggingface
 
 # Copy dependency specifications first to leverage Docker layer caching
 COPY requirements.txt .
@@ -39,15 +40,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source code (filtered strictly by .dockerignore)
 COPY . .
 
-# Pre-download and cache SpeechBrain ECAPA-TDNN and Vosk STT models
-# into /app/.model_cache so the container is self-contained with zero runtime download needs
-RUN python scripts/warmup_models.py
+# Assign full ownership of application files and user home to non-root user
+RUN chown -R voicelock:voicelock /app /home/voicelock
 
-# Assign full ownership of application files and model cache to non-root user
-RUN chown -R voicelock:voicelock /app
-
-# Switch to unprivileged runtime user
+# Switch to unprivileged runtime user before model warmup so cache is created under user home
 USER voicelock
+
+# Pre-download and cache SpeechBrain ECAPA-TDNN and Vosk STT models
+# into /app/.model_cache and /home/voicelock/.cache/huggingface as voicelock user
+RUN python scripts/warmup_models.py
 
 # Expose backend service port
 EXPOSE 8000

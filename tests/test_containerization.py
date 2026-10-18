@@ -57,7 +57,13 @@ def test_dockerfile_security_and_runtime_conventions():
     assert "useradd" in content, "Dockerfile must create an unprivileged user"
     assert "USER voicelock" in content, "Dockerfile must switch to unprivileged user voicelock"
 
-    # Model cache pre-warming
+    # Model cache pre-warming and non-root permission isolation
+    assert "HF_HOME=/home/voicelock/.cache/huggingface" in content, (
+        "Dockerfile must configure HF_HOME under unprivileged user home"
+    )
+    assert content.index("USER voicelock") < content.index("warmup_models.py"), (
+        "Dockerfile must switch to USER voicelock before pre-warming models so cache files/symlinks are owned by voicelock"
+    )
     assert "warmup_models.py" in content, "Dockerfile must execute model pre-warming during build"
 
     # Health check matching GET /
@@ -102,3 +108,32 @@ def test_warmup_models_script_structure():
     import scripts.warmup_models as warmup_mod
     assert hasattr(warmup_mod, "warmup_all_models"), "warmup_models must define warmup_all_models()"
     assert callable(warmup_mod.warmup_all_models)
+
+
+def test_app_lifespan_prewarms_model_and_handles_deferred_db(monkeypatch):
+    """Verify FastAPI lifespan pre-warms the ML model singleton and defers cleanly if DB is uninitialized."""
+    import asyncio
+    from app.main import app, lifespan
+    import app.services.speaker_service as ss
+
+    classifier_prewarmed = False
+    original_get_classifier = ss.get_classifier
+
+    def mock_get_classifier():
+        nonlocal classifier_prewarmed
+        classifier_prewarmed = True
+        return original_get_classifier()
+
+    monkeypatch.setattr(ss, "get_classifier", mock_get_classifier)
+    monkeypatch.setattr(
+        "app.main.get_system",
+        lambda: (_ for _ in ()).throw(RuntimeError("Simulated uninitialized database")),
+    )
+
+    async def _run():
+        async with lifespan(app):
+            pass
+
+    asyncio.run(_run())
+    assert classifier_prewarmed is True
+

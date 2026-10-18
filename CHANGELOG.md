@@ -10,6 +10,21 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4C: Docker Build and Runtime Validation**
+  - Built local Linux Docker backend image `voicelock-api:local-test` on Docker Desktop (`linux/arm64`, 3.9GB unpacked).
+  - Diagnosed and resolved cache permission boundary condition: updated `Dockerfile` to set `HF_HOME=/home/voicelock/.cache/huggingface`, chown `/home/voicelock`, and switch to `USER voicelock` prior to model warmup so all cache files and HuggingFace Hub symlinks are owned by UID 10001, eliminating `PermissionError` at runtime.
+  - Hardened `app/main.py` lifespan context manager to always pre-warm the SpeechBrain ECAPA-TDNN classifier singleton and safely defer profile loading if the database is unmigrated or temporarily unreachable during initial container bootstrap.
+  - Verified container runtime execution:
+    - Non-root unprivileged execution confirmed as `uid=10001(voicelock) gid=10001(voicelock)` on PID 1.
+    - Public discovery probe `GET /` verified returning HTTP 200 OK `{"status":"online","service":"VoiceLock — Speaker Recognition API","version":"1.0.0"}`.
+    - Docker `HEALTHCHECK` verified transitioning to `healthy`.
+    - SpeechBrain ECAPA-TDNN 192-d embedding extraction and Vosk STT small model verified loading completely offline from local cache.
+    - OS dependency `/usr/bin/ffmpeg` verified available and working alongside `soundfile`.
+    - Verified production fail-closed behavior when required authentication or database configuration is absent.
+    - Verified container logs for zero secret leakage, connection strings, or unhandled exceptions.
+    - Cleanly stopped and removed temporary test containers while preserving `voicelock-api:local-test`.
+  - Added test coverage in `tests/test_containerization.py` verifying `HF_HOME`, user ordering, and resilient lifespan startup.
+  - Backend test suite expanded from 296 to **297 tests passing in 14.37s**; frontend tests (31/31), lint, and production build passing cleanly.
 - **Increment 4B: Neon PostgreSQL Setup & Cloud Database Validation**
   - Configured Neon as the PostgreSQL cloud database provider for VoiceLock Enterprise using official Neon agent skills and Neon CLI (v8.8.0).
   - Configured project-level Neon MCP server for Antigravity via OAuth without storing long-lived API keys in the repository.
