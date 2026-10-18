@@ -151,9 +151,10 @@ def setup_test_auth():
 
         spk_repo = SpeakerRepository(session)
         usr_repo = UserSpeakerRepository(session)
-
-        spk_repo.create(speaker_id="Zubair", full_name="Zubair Pathan")
-        spk_repo.create(speaker_id="Alice", full_name="Alice Smith")
+        import numpy as np
+        dummy_emb = np.zeros(192, dtype=np.float32)
+        spk_repo.create(speaker_id="Zubair", full_name="Zubair Pathan", embedding=dummy_emb)
+        spk_repo.create(speaker_id="Alice", full_name="Alice Smith", embedding=dummy_emb)
 
         usr_repo.create(firebase_uid="user-uid-002", speaker_id="Zubair")
         usr_repo.create(firebase_uid="other-uid-999", speaker_id="Alice")
@@ -163,6 +164,8 @@ def setup_test_auth():
     with get_db_context() as session:
         session.query(UserSpeakerMapping).delete()
         session.query(SpeakerRecord).delete()
+    from scripts.seed_speakers import run_seed_speakers
+    run_seed_speakers()
 
     set_test_token_verifier(None)
     app.dependency_overrides.clear()

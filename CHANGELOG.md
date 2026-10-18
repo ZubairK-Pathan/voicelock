@@ -10,6 +10,22 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 2: Database-Backed Speaker Service**
+  - Implemented database-backed `SpeakerService` in `app/services/speaker_service.py` operating strictly within caller-provided SQLAlchemy sessions (`Session`).
+  - Added methods `get_registered_speakers()`, `get_speaker_record()`, `is_speaker_active()`, `get_speaker_embedding()`, `get_active_profiles()`, `identify_speaker()`, and `verify_speaker()`.
+  - Defined explicit typed exceptions: `SpeakerServiceError`, `SpeakerNotFoundError`, `InactiveSpeakerError`, `MissingSpeakerEmbeddingError`, `EmptySpeakerRegistryError`, and `SpeakerServiceDatabaseError`.
+  - Reused `app.core.embeddings` (`deserialize_embedding`) for validating 192-d unit vectors and safely excluding corrupted or missing embeddings.
+  - Implemented thread-safe SpeechBrain ECAPA-TDNN singleton cache (`get_classifier()`, `set_classifier_for_testing()`, `reset_classifier_for_testing()`).
+  - Eliminated fallback to `speaker_profiles/profiles.pkl` in production API endpoints, failing closed with clean HTTP status codes (503 on empty registry, 500 on database failure).
+  - Integrated `SpeakerService(db)` into API routes:
+    - `GET /speakers`: retrieves active registered speakers from persistent database.
+    - `POST /challenge`: validates speaker presence and active status before issuing liveness challenge.
+    - `POST /identify`: performs 1-to-N identification against active database profiles under concurrency control.
+    - `POST /verify`: performs 1-to-1 verification against target database profile embedding, enforcing actor authorization and single-use challenge burn before disk writes and ML inference.
+    - `WS /ws/identify`: identifies speakers against active database profiles using short-lived session context.
+  - Preserved standalone CLI and ML workflows (`predict.py`, `evaluate.py`, `tune_threshold.py`, `app.py`) and left pickle files untouched.
+  - Added comprehensive automated test suite `tests/test_database_speaker_service.py` (18 unit and integration tests) using synthetic unit vectors and disposable test databases.
+  - Total automated backend tests expanded from 208 to **226 tests passing in 4.50s** with zero regressions.
 - **Increment 1B: Safe Speaker Database Seeder**
   - Implemented safe, repeatable speaker database seeder script in `scripts/seed_speakers.py`.
   - Safely imports the 10 approved real speaker identities (`Advait`, `Amaan Ur Raheman`, `Krish`, `Omar`, `Parth`, `Shreyas`, `Umair`, `Zubair`, `abid`, `vikas`) from `speaker_profiles/profiles.pkl` into the database via `SpeakerRecord` and `SpeakerRepository`.

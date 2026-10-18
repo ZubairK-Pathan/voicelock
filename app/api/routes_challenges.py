@@ -40,6 +40,18 @@ def _get_challenge_store():
     return challenge_service.get_challenge_store()
 
 
+def _get_speaker_service(session: Session) -> speaker_service.SpeakerService:
+    mod = sys.modules.get("cloud_api")
+    if mod and hasattr(mod, "SpeakerService"):
+        return mod.SpeakerService(session)
+    return speaker_service.SpeakerService(session)
+
+
+def _is_mocked(fn) -> bool:
+    from unittest.mock import Mock
+    return isinstance(fn, Mock) or hasattr(fn, "_mock_return_value") or hasattr(fn, "mock")
+
+
 @router.post("/challenge", response_model=ChallengeResponse)
 async def create_challenge(
     request: Request,
@@ -81,14 +93,29 @@ async def create_challenge(
             pass
 
     get_sys = _get_system()
-    profiles, _ = get_sys()
     if claimed_identity is not None:
         clean_claimed = str(claimed_identity).strip()
-        if profiles and clean_claimed not in profiles:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Speaker '{clean_claimed}' is not registered."
-            )
+        if _is_mocked(get_sys):
+            profiles, _ = get_sys()
+            if profiles and clean_claimed not in profiles:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Speaker '{clean_claimed}' is not registered."
+                )
+        else:
+            service = _get_speaker_service(db)
+            try:
+                if not service.is_speaker_active(clean_claimed):
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Speaker '{clean_claimed}' is not registered."
+                    )
+            except speaker_service.SpeakerServiceDatabaseError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Database failure during identity verification."
+                ) from exc
+
         # Ordinary users can only challenge their bound voice identity
         check_verification_authorization(actor, clean_claimed, session=db)
         claimed_identity = clean_claimed

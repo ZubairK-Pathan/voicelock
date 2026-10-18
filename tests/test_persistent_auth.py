@@ -105,10 +105,10 @@ def setup_persistent_auth():
 
         spk_repo = SpeakerRepository(session)
         usr_repo = UserSpeakerRepository(session)
-
-        # Zubair and Omar are registered in speaker_profiles/profiles.pkl
-        spk_repo.create(speaker_id="Zubair", full_name="Zubair Pathan")
-        spk_repo.create(speaker_id="Omar", full_name="Omar Tariq")
+        import numpy as np
+        dummy_emb = np.zeros(192, dtype=np.float32)
+        spk_repo.create(speaker_id="Zubair", full_name="Zubair Pathan", embedding=dummy_emb)
+        spk_repo.create(speaker_id="Omar", full_name="Omar Tariq", embedding=dummy_emb)
 
         usr_repo.create(firebase_uid=UID_ZUBAIR, speaker_id="Zubair", assigned_by="system")
         usr_repo.create(firebase_uid=UID_OMAR, speaker_id="Omar", assigned_by="system")
@@ -118,6 +118,8 @@ def setup_persistent_auth():
     with get_db_context() as session:
         session.query(UserSpeakerMapping).delete()
         session.query(SpeakerRecord).delete()
+    from scripts.seed_speakers import run_seed_speakers
+    run_seed_speakers()
 
     set_test_token_verifier(None)
     set_test_device_registry(None)

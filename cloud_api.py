@@ -37,12 +37,21 @@ from predict import (
     DEFAULT_THRESHOLD,
 )
 
-# Re-export speaker service singletons
+# Re-export speaker service singletons and database service
 from app.services.speaker_service import (
+    SpeakerService,
+    SpeakerServiceError,
+    SpeakerNotFoundError,
+    InactiveSpeakerError,
+    MissingSpeakerEmbeddingError,
+    EmptySpeakerRegistryError,
+    SpeakerServiceDatabaseError,
     get_system,
     reload_profiles,
     get_profiles,
     get_classifier,
+    set_classifier_for_testing,
+    reset_classifier_for_testing,
 )
 
 # Re-export upload streaming service
@@ -129,10 +138,19 @@ __all__ = [
     "predict_speaker",
     "verify_speaker",
     "DEFAULT_THRESHOLD",
+    "SpeakerService",
+    "SpeakerServiceError",
+    "SpeakerNotFoundError",
+    "InactiveSpeakerError",
+    "MissingSpeakerEmbeddingError",
+    "EmptySpeakerRegistryError",
+    "SpeakerServiceDatabaseError",
     "get_system",
     "reload_profiles",
     "get_profiles",
     "get_classifier",
+    "set_classifier_for_testing",
+    "reset_classifier_for_testing",
     "save_upload",
     "get_challenge_store",
     "default_challenge_store",

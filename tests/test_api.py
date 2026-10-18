@@ -48,7 +48,9 @@ SAMPLE_WAV = Path(__file__).resolve().parent.parent / "processed_dataset" / "Zub
 
 @pytest.fixture(autouse=True)
 def override_auth_dependencies():
-    """Ensure baseline regression tests execute under an authenticated admin context."""
+    """Ensure baseline regression tests execute under an authenticated admin context with seeded database."""
+    from scripts.seed_speakers import run_seed_speakers
+    run_seed_speakers()
     _challenge_limiter.reset_for_testing()
     _verify_limiter.reset_for_testing()
     _identify_limiter.reset_for_testing()

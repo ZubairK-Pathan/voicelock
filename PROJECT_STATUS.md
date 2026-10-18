@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 18, 2026  
-**Current Milestone:** Increment 1B — Safe Speaker Database Seeder (Completed)  
+**Current Milestone:** Increment 2 — Database-Backed Speaker Service (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Safe speaker database seeder active, 208 backend automated tests passing in 3.33s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
+**Application Run Status:** Fully Operational (Database-backed speaker service active, 226 backend automated tests passing in 4.50s, 6 frontend unit tests passing, Streamlit AppTest, ML inference, and calibration passing)
 
 ---
 
 ## 1. Executive Status
-Increment 1B implements the safe, repeatable speaker database seeder (`scripts/seed_speakers.py`) for importing the ten approved real speaker biometric profiles from `speaker_profiles/profiles.pkl` into the persistent database using `SpeakerRecord` and `SpeakerRepository`. Strict pre-write validation guarantees that every loaded vector is 192-dimensional, numeric, and finite (rejecting NaN, Inf, and non-numeric inputs), with non-approved identities (`abc`, `maam`) filtered out by default. Idempotency and conflict handling ensure that identical existing records are safely skipped, while conflicting existing records (different embeddings, inactive statuses, or dimension mismatches) abort the entire transaction to protect biometric data integrity. The script enforces atomic session commit/rollback, masks credentials, suppresses vector values, and supports `--dry-run` inspection. The automated test suite expanded from 191 to 208 tests (17 dedicated seeder tests in `tests/test_seed_speakers.py`), verifying end-to-end seeding, idempotency, conflict aborts, midway failure rollbacks, and CLI behavior with zero ML or UI regressions.
+Increment 2 implements the Database-Backed Speaker Service (`app/services/speaker_service.py`), retiring reliance on raw file-based `speaker_profiles/profiles.pkl` for all production FastAPI routes (`/speakers`, `/challenge`, `/identify`, `/verify`, `/ws/identify`) while preserving local CLI workflows (`predict.py`, `evaluate.py`, `tune_threshold.py`, `app.py`). `SpeakerService` operates strictly within caller-owned SQLAlchemy sessions (`Session`), preventing concurrency leaks across requests. It deserializes and validates 192-d biometric embeddings via `app.core.embeddings`, safely omitting inactive speakers, missing voiceprints, or corrupted vectors without exposing biometric numbers in logs. Explicit typed exceptions (`SpeakerNotFoundError`, `InactiveSpeakerError`, `MissingSpeakerEmbeddingError`, `EmptySpeakerRegistryError`, `SpeakerServiceDatabaseError`) enforce fail-closed security (returning clean HTTP 404, 403, 503, or 500 status codes). Persistent actor authorization (`UserSpeakerMapping` and `AuthenticatedDevice`) and single-use challenge consumption strictly precede disk spooling and SpeechBrain ECAPA-TDNN inference. The automated backend test suite expanded from 208 to **226 tests passing in 4.50s** (18 dedicated service and API integration tests in `tests/test_database_speaker_service.py`) with zero ML or UI regressions.
 
 
 ---
@@ -463,21 +463,40 @@ Increment 1B implements the safe, repeatable speaker database seeder (`scripts/s
   - CLI features: provides `--help`, `--dry-run` (validation and action reporting without persistent writes), and optional `--db-url` overrides, masking database credentials and suppressing vector values.
 - **Automated Verification:**
   - Added `tests/test_seed_speakers.py` (17 unit tests) covering synthetic embedding seeding, sample count assignment, excluded identity filtering, strict validation, dry-run safety, rerun idempotency, conflict aborts, unrelated record preservation, midway failure rollbacks, Firebase isolation, unmigrated database detection, and CLI invocations.
-  - Full automated backend test suite expanded from 191 to **208 tests passing in 3.33s**.
+### Increment 2: Database-Backed Speaker Service (Completed)
+- **Database-Backed Service Architecture (`app/services/speaker_service.py`):**
+  - Implemented `SpeakerService` operating strictly on caller-provided SQLAlchemy sessions (`Session`).
+  - Implemented core query methods: `get_registered_speakers()`, `get_speaker_record()`, `is_speaker_active()`, `get_speaker_embedding()`, and `get_active_profiles()`.
+  - Defined explicit typed exceptions: `SpeakerServiceError`, `SpeakerNotFoundError`, `InactiveSpeakerError`, `MissingSpeakerEmbeddingError`, `EmptySpeakerRegistryError`, and `SpeakerServiceDatabaseError`.
+  - Reused `app.core.embeddings` (`deserialize_embedding`) for validating 192-d unit vectors and safely excluding corrupted or missing embeddings without crashing.
+  - Implemented thread-safe SpeechBrain ECAPA-TDNN singleton cache (`get_classifier()`, `set_classifier_for_testing()`, `reset_classifier_for_testing()`).
+  - Eliminated fallback to `speaker_profiles/profiles.pkl` in production API endpoints, failing closed with clean HTTP status codes (503 on empty registry, 500 on database failure).
+- **FastAPI Endpoint Integration:**
+  - `GET /speakers`: injected `db: Session = Depends(get_db)`, retrieving registered speakers from database.
+  - `POST /challenge`: validates speaker presence and active status before issuing liveness challenge (HTTP 404 on unknown/inactive speaker).
+  - `POST /identify`: performs 1-to-N identification against active database profiles under concurrency control (HTTP 503 on empty registry).
+  - `POST /verify`: performs 1-to-1 verification against target database profile embedding, enforcing actor authorization and single-use challenge burn before disk writes and ML inference.
+  - `WS /ws/identify`: identifies speakers against active database profiles using short-lived session context.
+- **Workflow & Evaluation Preservation:**
+  - Preserved standalone CLI and ML workflows (`predict.py`, `evaluate.py`, `tune_threshold.py`, `app.py`) and left pickle files untouched.
+- **Automated Verification:**
+  - Added `tests/test_database_speaker_service.py` (18 unit and integration tests) using synthetic unit vectors and disposable test databases.
+  - Total automated backend tests expanded from 208 to **226 tests passing in 4.50s**.
 
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Speaker Service Suite** | `.venv/bin/pytest tests/test_database_speaker_service.py -v` | 0 | **18/18 tests PASSED in 2.14s** (1-to-N identify, 1-to-1 verify, score ranking, inactive/missing/corrupt embeddings, empty registry, DB failures fail-closed, ordinary user ownership, device authorization, challenge burn ordering, session isolation) |
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
 | **Database Migration Suite** | `.venv/bin/pytest tests/test_database.py -v` | 0 | **17/17 tests PASSED in 1.01s** (Migration 8046c184216a upgrade/downgrade, embedding_json column inspection, ORM persistence) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **208/208 tests PASSED in 3.33s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder) |
+| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **226/226 tests PASSED in 4.50s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 17 Database + 12 Device Repo + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service) |
 | **Frontend Unit Tests** | `npm test` (in `frontend/`) | 0 | **6/6 tests PASSED in 22ms** (Bearer token attachment, unauthenticated routes, error suppression, 401/403 safety, JSON parsing) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 24 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 153ms** |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 209ms** |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
 | **Evaluation Suite** | `.venv/bin/python evaluate.py` | 0 | 27/27 test samples correct (100% accuracy, Macro F1: 1.0) |
 | **Threshold Calibration** | `.venv/bin/python tune_threshold.py` | 0 | Generates ROC/DET curves; Genuine Mean: 0.8136, Impostor: 0.2520 |

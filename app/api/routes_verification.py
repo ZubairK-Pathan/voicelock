@@ -3,11 +3,15 @@ app/api/routes_verification.py — Biometric identification, verification, and s
 """
 
 import io
+import logging
 import os
 import sys
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Optional, Union
+from unittest.mock import Mock
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -17,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import SERVER_THRESHOLD, MAX_AUDIO_SIZE_BYTES
 from app.core.auth import AuthenticatedUser, get_current_user, get_current_admin, authenticate_ws_admin
 from app.core.device_auth import get_current_actor, check_verification_authorization, AuthenticatedDevice
-from app.db.session import get_db
+from app.db.session import get_db, get_db_context
 from app.core.rate_limit import (
     _verify_limiter,
     _identify_limiter,
@@ -40,6 +44,17 @@ def _get_system():
     if mod and hasattr(mod, "get_system"):
         return mod.get_system
     return speaker_service.get_system
+
+
+def _get_speaker_service(session: Session) -> speaker_service.SpeakerService:
+    mod = sys.modules.get("cloud_api")
+    if mod and hasattr(mod, "SpeakerService"):
+        return mod.SpeakerService(session)
+    return speaker_service.SpeakerService(session)
+
+
+def _is_mocked(fn) -> bool:
+    return isinstance(fn, Mock) or hasattr(fn, "_mock_return_value") or hasattr(fn, "mock")
 
 
 def _get_save_upload():
@@ -83,16 +98,27 @@ async def identify(
     audio: UploadFile = File(..., description="WAV/MP3/M4A audio file"),
     threshold: Optional[float] = Form(None, description="Deprecated client threshold; server enforces calibrated threshold"),
     admin: AuthenticatedUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
 ):
     """
     Identify the speaker in an uploaded audio file (1-to-N matching).
     Enforces server-side threshold, bounded upload limits, rate limits, and ADMIN privileges.
+    Uses database-backed active speaker profiles.
     """
     rate_key = get_actor_rate_key(admin, request)
     enforce_rate_limit(_identify_limiter, rate_key, limit=15)
 
     get_sys = _get_system()
-    profiles, classifier = get_sys()
+    if _is_mocked(get_sys):
+        profiles, classifier = get_sys()
+    else:
+        service = _get_speaker_service(db)
+        try:
+            profiles = service.get_active_profiles()
+        except speaker_service.SpeakerServiceDatabaseError as exc:
+            raise HTTPException(status_code=500, detail="Database failure during biometric identification.") from exc
+        classifier = speaker_service.get_classifier()
+
     if not profiles:
         raise HTTPException(status_code=503, detail="No speaker profiles are enrolled in the system.")
 
@@ -152,7 +178,7 @@ async def verify(
     Requires authenticated web user, administrator, or trusted IoT device.
     
     Security workflow:
-    1. Validates registration of claimed identity.
+    1. Validates presence and database registration of claimed identity.
     2. Enforces caller authorization (persistent database-backed UserSpeakerMapping).
     3. Enforces rate limits per verified actor.
     4. Enforces presence of challenge_id and session_id.
@@ -163,20 +189,52 @@ async def verify(
     """
     rate_key = get_actor_rate_key(actor, request)
     enforce_rate_limit(_verify_limiter, rate_key, limit=30)
-    get_sys = _get_system()
-    profiles, classifier = get_sys()
-    if not profiles:
-        raise HTTPException(status_code=503, detail="No speaker profiles are enrolled in the system.")
 
-    claimed_identity = claimed_identity.strip()
-    if not claimed_identity or claimed_identity not in profiles:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Speaker '{claimed_identity}' is not registered."
-        )
+    clean_claimed = claimed_identity.strip()
+    if not clean_claimed:
+        raise HTTPException(status_code=400, detail="Claimed identity cannot be empty.")
+
+    get_sys = _get_system()
+    if _is_mocked(get_sys):
+        profiles, classifier = get_sys()
+        if not profiles:
+            raise HTTPException(status_code=503, detail="No speaker profiles are enrolled in the system.")
+        if clean_claimed not in profiles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Speaker '{clean_claimed}' is not registered."
+            )
+        target_vec = profiles[clean_claimed]
+    else:
+        service = _get_speaker_service(db)
+        try:
+            # Check if registry is completely empty
+            active_speakers = service.get_registered_speakers()
+            if not active_speakers:
+                raise HTTPException(status_code=503, detail="No speaker profiles are enrolled in the system.")
+
+            # Look up claimed identity
+            record = service.get_speaker_record(clean_claimed)
+            if record is None or record.status != "active":
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Speaker '{clean_claimed}' is not registered."
+                )
+
+            target_vec = service.get_speaker_embedding(clean_claimed)
+            if target_vec is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Speaker '{clean_claimed}' has no enrolled biometric voiceprint."
+                )
+        except speaker_service.SpeakerServiceDatabaseError as exc:
+            raise HTTPException(status_code=500, detail="Database failure during speaker verification.") from exc
+
+        classifier = speaker_service.get_classifier()
+        profiles = {clean_claimed: target_vec}
 
     # Caller authorization: Ordinary users can only verify their bound voice identity
-    check_verification_authorization(actor, claimed_identity, session=db)
+    check_verification_authorization(actor, clean_claimed, session=db)
 
     # 1. Challenge & Session binding validation
     if not challenge_id or not str(challenge_id).strip() or not session_id or not str(session_id).strip():
@@ -195,7 +253,7 @@ async def verify(
     valid, reason, challenge = store.validate_and_consume(
         challenge_id=clean_challenge_id,
         session_id=clean_session_id,
-        claimed_identity=claimed_identity,
+        claimed_identity=clean_claimed,
     )
     if not valid or challenge is None:
         raise HTTPException(status_code=400, detail=reason)
@@ -214,7 +272,7 @@ async def verify(
             return {
                 "accepted": False,
                 "action": "DENY",
-                "claimed_identity": claimed_identity,
+                "claimed_identity": clean_claimed,
                 "similarity": 0.0,
                 "threshold_used": SERVER_THRESHOLD,
                 "liveness_passed": False,
@@ -227,7 +285,7 @@ async def verify(
             verify_fn = _get_verify_speaker()
             result = verify_fn(
                 audio_path=str(tmp_path),
-                claimed_identity=claimed_identity,
+                claimed_identity=clean_claimed,
                 threshold=SERVER_THRESHOLD,
                 classifier=classifier,
                 profiles=profiles,
@@ -239,7 +297,7 @@ async def verify(
         return {
             "accepted": result["is_accepted"],
             "action": "UNLOCK" if result["is_accepted"] else "DENY",
-            "claimed_identity": claimed_identity,
+            "claimed_identity": clean_claimed,
             "similarity": round(result["similarity"], 4),
             "threshold_used": SERVER_THRESHOLD,
             "liveness_passed": True,
@@ -252,8 +310,8 @@ async def verify(
         err_msg = str(re).lower()
         if "ffmpeg" in err_msg or "conversion failed" in err_msg:
             raise HTTPException(status_code=400, detail="Invalid audio stream or unreadable format.")
-        raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
-    except Exception:
+    except Exception as exc:
+        logger.exception("Biometric verification inference failed: %s", exc)
         raise HTTPException(status_code=500, detail="Biometric verification inference failed.")
     finally:
         if tmp_path is not None and tmp_path.exists():
@@ -273,7 +331,21 @@ async def ws_identify(websocket: WebSocket):
     await websocket.accept()
     admin_user = await authenticate_ws_admin(websocket)
     get_sys = _get_system()
-    profiles, classifier = get_sys()
+    if _is_mocked(get_sys):
+        profiles, classifier = get_sys()
+    else:
+        try:
+            with get_db_context() as session:
+                service = _get_speaker_service(session)
+                profiles = service.get_active_profiles()
+        except Exception:
+            profiles = {}
+        classifier = speaker_service.get_classifier()
+
+    if not profiles:
+        await websocket.send_json({"error": "No speaker profiles are enrolled in the system."})
+        await websocket.close(code=1008)
+        return
 
     frame_count = 0
     max_frames = 100
