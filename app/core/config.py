@@ -107,6 +107,7 @@ def load_admin_uids() -> set[str]:
 
 VOICELOCK_ENV = load_voicelock_env()
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
+FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 ADMIN_EMAILS = load_admin_emails()
 ADMIN_UIDS = load_admin_uids()

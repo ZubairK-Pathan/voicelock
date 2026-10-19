@@ -367,10 +367,128 @@ def test_production_guard_prohibits_test_verifier():
 def test_missing_production_credentials_fails_safely():
     """Verify that initializing Firebase in production without valid credentials fails closed."""
     reset_firebase_app_for_testing()
-    with patch.dict(os.environ, {"VOICELOCK_ENV": "production", "FIREBASE_CREDENTIALS_PATH": "/nonexistent/key.json"}):
+    with patch.dict(os.environ, {"VOICELOCK_ENV": "production", "FIREBASE_CREDENTIALS_PATH": "/nonexistent/key.json", "FIREBASE_CREDENTIALS_JSON": ""}):
         with patch("firebase_admin.credentials.ApplicationDefault", side_effect=Exception("No ADC")):
             with pytest.raises(RuntimeError, match="Production authentication failure"):
                 get_firebase_app()
+    reset_firebase_app_for_testing()
+
+
+def test_file_based_credential_loading_preserved(tmp_path):
+    """Verify that existing file-based credential loading continues to work when the file exists."""
+    reset_firebase_app_for_testing()
+    dummy_key_file = tmp_path / "service_account.json"
+    dummy_key_file.write_text('{"type": "service_account", "project_id": "test-p"}')
+
+    mock_cred = MagicMock()
+    mock_app = MagicMock()
+
+    with patch("firebase_admin.credentials.Certificate", return_value=mock_cred) as mock_cert, \
+         patch("firebase_admin.initialize_app", return_value=mock_app) as mock_init, \
+         patch.dict(os.environ, {
+             "VOICELOCK_ENV": "production",
+             "FIREBASE_CREDENTIALS_PATH": str(dummy_key_file),
+             "FIREBASE_PROJECT_ID": "test-p",
+         }, clear=False):
+        app_instance = get_firebase_app()
+        assert app_instance is mock_app
+        mock_cert.assert_called_once_with(str(dummy_key_file))
+        mock_init.assert_called_once_with(mock_cred, {"projectId": "test-p"})
+    reset_firebase_app_for_testing()
+
+
+def test_valid_json_environment_credentials_initialize_firebase():
+    """Verify that a valid JSON string in FIREBASE_CREDENTIALS_JSON initializes Firebase Admin."""
+    reset_firebase_app_for_testing()
+    valid_payload = '{"type": "service_account", "project_id": "env-project", "private_key": "dummy"}'
+
+    mock_cred = MagicMock()
+    mock_app = MagicMock()
+
+    with patch("firebase_admin.credentials.Certificate", return_value=mock_cred) as mock_cert, \
+         patch("firebase_admin.initialize_app", return_value=mock_app) as mock_init, \
+         patch.dict(os.environ, {
+             "VOICELOCK_ENV": "production",
+             "FIREBASE_CREDENTIALS_PATH": "/nonexistent/no_file.json",
+             "FIREBASE_CREDENTIALS_JSON": valid_payload,
+             "FIREBASE_PROJECT_ID": "env-project",
+         }, clear=False):
+        app_instance = get_firebase_app()
+        assert app_instance is mock_app
+        mock_cert.assert_called_once()
+        called_arg = mock_cert.call_args[0][0]
+        assert isinstance(called_arg, dict)
+        assert called_arg["project_id"] == "env-project"
+        mock_init.assert_called_once_with(mock_cred, {"projectId": "env-project"})
+    reset_firebase_app_for_testing()
+
+
+def test_malformed_json_credentials_fail_safely_without_leaks():
+    """Verify that malformed JSON in FIREBASE_CREDENTIALS_JSON fails closed with sanitized error."""
+    reset_firebase_app_for_testing()
+    malformed_secret = '{"type": "service_account", "private_key": "-----BEGIN SENSITIVE KEY-----'
+
+    with patch.dict(os.environ, {
+        "VOICELOCK_ENV": "production",
+        "FIREBASE_CREDENTIALS_PATH": "/nonexistent/no_file.json",
+        "FIREBASE_CREDENTIALS_JSON": malformed_secret,
+    }, clear=False):
+        with pytest.raises(ValueError) as exc_info:
+            get_firebase_app()
+        err_msg = str(exc_info.value)
+        assert err_msg == "Malformed FIREBASE_CREDENTIALS_JSON: Invalid JSON format."
+        assert "SENSITIVE KEY" not in err_msg
+    reset_firebase_app_for_testing()
+
+
+def test_invalid_json_type_rejected():
+    """Verify that JSON environment variable containing non-dict JSON (array, string, int) is rejected."""
+    reset_firebase_app_for_testing()
+    for invalid_val in ('["an", "array"]', '"string_value"', '12345', 'true'):
+        with patch.dict(os.environ, {
+            "VOICELOCK_ENV": "production",
+            "FIREBASE_CREDENTIALS_PATH": "/nonexistent/no_file.json",
+            "FIREBASE_CREDENTIALS_JSON": invalid_val,
+        }, clear=False):
+            with pytest.raises(ValueError) as exc_info:
+                get_firebase_app()
+            assert str(exc_info.value) == "Invalid FIREBASE_CREDENTIALS_JSON: Root JSON value must be an object."
+        reset_firebase_app_for_testing()
+
+
+def test_invalid_certificate_fields_rejected_safely():
+    """Verify that a JSON dict failing Certificate initialization raises a sanitized ValueError."""
+    reset_firebase_app_for_testing()
+    invalid_dict_json = '{"invalid_field": "no_service_account_type"}'
+    with patch.dict(os.environ, {
+        "VOICELOCK_ENV": "production",
+        "FIREBASE_CREDENTIALS_PATH": "/nonexistent/no_file.json",
+        "FIREBASE_CREDENTIALS_JSON": invalid_dict_json,
+    }, clear=False):
+        with pytest.raises(ValueError) as exc_info:
+            get_firebase_app()
+        assert str(exc_info.value) == "Invalid FIREBASE_CREDENTIALS_JSON: Certificate initialization failed."
+    reset_firebase_app_for_testing()
+
+
+def test_firebase_initialization_idempotency():
+    """Verify that repeated invocations of get_firebase_app do not re-initialize the app."""
+    reset_firebase_app_for_testing()
+    valid_payload = '{"type": "service_account", "project_id": "idem-project"}'
+    mock_cred = MagicMock()
+    mock_app = MagicMock()
+
+    with patch("firebase_admin.credentials.Certificate", return_value=mock_cred), \
+         patch("firebase_admin.initialize_app", return_value=mock_app) as mock_init, \
+         patch.dict(os.environ, {
+             "VOICELOCK_ENV": "production",
+             "FIREBASE_CREDENTIALS_PATH": "/nonexistent/no_file.json",
+             "FIREBASE_CREDENTIALS_JSON": valid_payload,
+         }, clear=False):
+        app1 = get_firebase_app()
+        app2 = get_firebase_app()
+        assert app1 is app2
+        assert mock_init.call_count == 1
     reset_firebase_app_for_testing()
 
 

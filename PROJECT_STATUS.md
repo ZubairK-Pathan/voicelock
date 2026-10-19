@@ -1,9 +1,9 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 4E — Live Database Container Validation & Azure Deployment Preparation (Completed)  
+**Last Updated:** October 20, 2026  
+**Current Milestone:** Increment 4F — Environment Variable Credential Fallback for Serverless Container Deployment (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Optimized Docker image `voicelock-api:readiness-test` validated live against Neon PostgreSQL database over TLS in container; non-root UID 10001 verified; 10 speaker profiles pre-warmed from Neon; idle memory footprint 505.2 MiB; cold-start latency ~5-7s; 297 backend tests passing in 15.52s, 31 frontend tests passing in 156ms, lint and build clean)
+**Application Run Status:** Fully Operational (Support for in-memory FIREBASE_CREDENTIALS_JSON fallback validated; 303 backend tests passing in 17.58s; zero secret leakage; clean working tree)
 
 ---
 

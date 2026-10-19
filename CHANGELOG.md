@@ -10,6 +10,11 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4F: Environment Variable Credential Fallback for Serverless Container Deployment**
+  - Updated `app/core/auth.py` and `app/core/config.py` to support `FIREBASE_CREDENTIALS_JSON` environment variable as a fallback when `FIREBASE_CREDENTIALS_PATH` does not point to a valid file on disk.
+  - Enabled serverless container environments (e.g. Azure Container Apps Express mode) to inject Firebase credentials directly into application memory without requiring file volume mounts.
+  - Hardened credential parsing with strict type validation (requiring root JSON object/dictionary) and sanitized error handling to prevent sensitive data leakage in error messages or logs.
+  - Added comprehensive test suite in `tests/test_auth.py` covering file-based preservation, valid JSON environment credential loading, fail-closed handling for malformed or missing credentials, invalid JSON types, and idempotent initialization (303 tests passing).
 - **Increment 4E: Live Database Container Validation & Azure Deployment Preparation**
   - Validated optimized Docker container (`voicelock-api:readiness-test`) against live Neon PostgreSQL database (`sweet-block-01674817`) over TLS with zero credential or connection-string leakage in logs.
   - Verified container lifespan pre-warms all 10 active speaker profiles from the database and public probe `GET /` reports HTTP 200 OK.

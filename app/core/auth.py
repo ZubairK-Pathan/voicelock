@@ -3,6 +3,7 @@ app/core/auth.py — Server-side Firebase ID-token verification, trusted role re
 """
 
 import asyncio
+import json
 import os
 from typing import Any, Callable, List, Optional, Set
 from pathlib import Path
@@ -16,6 +17,7 @@ from firebase_admin import auth as fb_auth, credentials as fb_credentials
 from app.core.config import (
     BASE_DIR,
     FIREBASE_CREDENTIALS_PATH,
+    FIREBASE_CREDENTIALS_JSON,
     FIREBASE_PROJECT_ID,
     VOICELOCK_ENV,
     load_admin_emails,
@@ -70,11 +72,27 @@ def get_firebase_app() -> Optional[firebase_admin.App]:
     cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", FIREBASE_CREDENTIALS_PATH)
     if cred_path and os.path.exists(cred_path):
         cred = fb_credentials.Certificate(cred_path)
-    elif current_env != "production":
-        # Check local development fallback only outside production
-        default_dev_path = BASE_DIR / "firebase-credentials.json"
-        if default_dev_path.exists():
-            cred = fb_credentials.Certificate(str(default_dev_path))
+    else:
+        # Check environment variable fallback
+        raw_json = os.getenv("FIREBASE_CREDENTIALS_JSON", FIREBASE_CREDENTIALS_JSON)
+        if raw_json and raw_json.strip():
+            try:
+                parsed = json.loads(raw_json)
+            except Exception:
+                raise ValueError("Malformed FIREBASE_CREDENTIALS_JSON: Invalid JSON format.") from None
+
+            if not isinstance(parsed, dict):
+                raise ValueError("Invalid FIREBASE_CREDENTIALS_JSON: Root JSON value must be an object.")
+
+            try:
+                cred = fb_credentials.Certificate(parsed)
+            except Exception:
+                raise ValueError("Invalid FIREBASE_CREDENTIALS_JSON: Certificate initialization failed.") from None
+        elif current_env != "production":
+            # Check local development fallback only outside production
+            default_dev_path = BASE_DIR / "firebase-credentials.json"
+            if default_dev_path.exists():
+                cred = fb_credentials.Certificate(str(default_dev_path))
 
     if cred is not None:
         options = {}
