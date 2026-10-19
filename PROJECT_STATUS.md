@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 19, 2026  
-**Current Milestone:** Increment 4D — Azure Deployment Readiness & Docker Image Optimization (Completed)  
+**Current Milestone:** Increment 4E — Live Database Container Validation & Azure Deployment Preparation (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Optimized Docker image `voicelock-api:readiness-test` built at 830 MB — a 79% reduction from 3.9 GB — using PyTorch CPU wheels and refined build context; non-root UID 10001 verified; offline ECAPA-TDNN and Vosk STT verified; complete Azure architecture and deployment plan documented; 297 backend tests passing in 16.79s, 31 frontend tests passing in 158ms, lint and build clean)
+**Application Run Status:** Fully Operational (Optimized Docker image `voicelock-api:readiness-test` validated live against Neon PostgreSQL database over TLS in container; non-root UID 10001 verified; 10 speaker profiles pre-warmed from Neon; idle memory footprint 505.2 MiB; cold-start latency ~5-7s; 297 backend tests passing in 15.52s, 31 frontend tests passing in 156ms, lint and build clean)
 
 ---
 
 ## 1. Executive Status
-Increment 4D optimizes the production VoiceLock backend Docker container image and establishes complete deployment readiness for Microsoft Azure without provisioning cloud resources. Through deep layer inspection of the 3.9 GB baseline image, the primary bloat was identified as ~4.1 GB of unused NVIDIA CUDA and Triton binaries pulled in by default PyTorch wheels. The container build was optimized by introducing `--extra-index-url https://download.pytorch.org/whl/cpu` during dependency installation, switching to `COPY --chown=voicelock:voicelock . .` to eliminate a duplicate layer, and expanding `.dockerignore` to exclude raw datasets (`dataset/`, 56 MB) and local profile artifacts (`speaker_profiles/`, `*.pkl`). The resulting image, tagged `voicelock-api:readiness-test`, reduced uncompressed content size from **3.9 GB to 830 MB (a 79% reduction)** and build context transfer from 60.69 MB to 196.91 kB. Realistic runtime validation confirmed that the optimized image executes under unprivileged UID 10001, passes container health checks on `GET /` (HTTP 200), and executes offline ML inference (SpeechBrain ECAPA-TDNN 192-d vectors and Vosk STT) alongside FFmpeg audio normalization with zero runtime downloads. A comprehensive production configuration audit confirmed fail-closed security for Firebase Auth, Neon PostgreSQL TLS connectivity, server-side RBAC, and wildcard CORS rejection. An end-to-end Azure deployment blueprint and cost-control plan (Azure Static Web Apps + Azure Container Apps + Neon PostgreSQL) was authored in `azure_deployment_readiness_plan.md`. Automated tests pass with zero regressions: **297 backend tests passing in 16.79s** and **31 frontend tests passing in 158ms**.
+Increment 4E validates the optimized VoiceLock Docker container image against the live Neon PostgreSQL database (`sweet-block-01674817`) and prepares the end-to-end Azure production deployment plan across Azure Container Apps (backend), Azure Static Web Apps (frontend), and GitHub Container Registry (GHCR). A realistic runtime test inside a Linux container verified that the application securely connects to Neon over TLS, pre-warms all 10 enrolled speaker profiles from the database, and responds to public discovery probes on `GET /` with HTTP 200 OK without leaking connection strings or credentials. Live container telemetry measured an idle memory footprint of 505.2 MiB (reaching 650–750 MiB during peak ML inference) and 0.26% CPU utilization, confirming a right-sized Container Apps allocation of 1.0 vCPU and 2.0 GiB RAM. Database URL parsing was hardened in `app/db/session.py` to strip surrounding quotes from environment variables. A thorough cost, quota, and authentication analysis verified that using ACA scale-to-zero (`minReplicas = 0`) and SWA Free tier keeps recurring hosting costs at $0.00/month within the Azure for Students free monthly consumption grants (180,000 vCPU-seconds and 360,000 GiB-seconds free). All 297 backend tests pass in 15.52s, 31 frontend tests pass in 156ms, and the working tree is clean. Provisioning commands and deployment blueprints are fully prepared and awaiting explicit user authorization before execution.
 
 
 ---
@@ -807,6 +807,42 @@ Increment 4D optimizes the production VoiceLock backend Docker container image a
 - **Biometric Privacy & Seeding Architecture Plan:**
   - Real speaker biometric profiles (`speaker_profiles/profiles.pkl`) were NOT uploaded or seeded into the remote database in this increment.
   - *Safe Seeding Plan:* A dedicated admin CLI script (`scripts/seed_remote_speakers.py`) will be executed by an authorized human operator with direct database access. The script will read local profiles, validate 192-d vectors, and insert records directly over encrypted TLS without ever committing profiles, keys, or audio to Git.
+
+### Increment 4C: Docker Build and Runtime Validation (Completed)
+- **Container Build & Offline Cache:**
+  - Built local Linux Docker backend image `voicelock-api:local-test` on Docker Desktop (`linux/arm64`).
+  - Configured non-root UID 10001 (`voicelock:voicelock`) with `HF_HOME=/home/voicelock/.cache/huggingface`, ensuring offline HuggingFace and Vosk caches are owned by the unprivileged user.
+  - Verified container executes under UID 10001 on PID 1 with zero runtime model downloads.
+- **Verification:**
+  - Verified `HEALTHCHECK` passes on `GET /` (HTTP 200).
+  - Added `tests/test_containerization.py` (4 tests).
+
+### Increment 4D: Azure Deployment Readiness & Docker Image Optimization (Completed)
+- **Image Optimization (79% Reduction):**
+  - Optimized PyTorch installation by using CPU wheels (`--extra-index-url https://download.pytorch.org/whl/cpu`), stripping ~4.1 GB of unused CUDA and Triton binaries.
+  - Optimized layer caching with `COPY --chown=voicelock:voicelock . .`.
+  - Excluded raw datasets and pickle files via `.dockerignore`.
+  - Reduced final container image size from 3.9 GB to 830 MB.
+- **Production Audit & Cost Strategy:**
+  - Confirmed fail-closed Firebase auth, CORS rejection of wildcards with credentials, and TLS database connectivity.
+  - Authored Azure deployment readiness and cost strategy for Azure Container Apps + Azure Static Web Apps.
+
+### Increment 4E: Live Database Container Validation & Azure Deployment Preparation (Completed)
+- **Live Neon Container Validation:**
+  - Validated optimized Docker container (`voicelock-api:readiness-test`) against live Neon PostgreSQL database (`sweet-block-01674817`) over TLS.
+  - Verified container lifespan pre-warms all 10 active speaker profiles from the database and public discovery probe `GET /` returns HTTP 200 OK.
+  - Hardened database connection URL parser in `app/db/session.py` to strip surrounding quotes from environment variables, with full test coverage in `tests/test_database.py`.
+- **Runtime Telemetry & Sizing:**
+  - Idle container memory footprint: 505.2 MiB (peak ~650–750 MiB during ML inference).
+  - Idle CPU: 0.26%.
+  - Verified Azure Container Apps sizing: 1.0 vCPU and 2.0 GiB RAM.
+  - Verified container cold-start latency: 5–7 seconds from idle/cold to live response.
+- **Azure & GHCR Architecture:**
+  - Backend: Azure Container Apps consumption tier with scale-to-zero (`minReplicas = 0`, `maxReplicas = 1`) to guarantee $0.00/month recurring cost within Azure for Students monthly free grants (180,000 vCPU-seconds and 360,000 GiB-seconds free).
+  - Frontend: Azure Static Web Apps Free tier ($0.00/month).
+  - Container Registry: Private GitHub Container Registry (GHCR) with Personal Access Token (`read:packages`) stored as ACA secret, incurring $0 extra Azure costs.
+  - Secret Mounting: Firebase service-account secret mounting via ACA secret volume or base64 environment variable without leaking credentials.
+  - Verified 297 backend tests passing in 15.52s, 31 frontend tests passing in 156ms.
 
 ---
 

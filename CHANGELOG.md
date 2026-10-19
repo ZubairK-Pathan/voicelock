@@ -10,6 +10,16 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4E: Live Database Container Validation & Azure Deployment Preparation**
+  - Validated optimized Docker container (`voicelock-api:readiness-test`) against live Neon PostgreSQL database (`sweet-block-01674817`) over TLS with zero credential or connection-string leakage in logs.
+  - Verified container lifespan pre-warms all 10 active speaker profiles from the database and public probe `GET /` reports HTTP 200 OK.
+  - Measured live container runtime memory: 505.2 MiB idle memory footprint (650–750 MiB during peak ML inference) and 0.26% idle CPU; confirmed 1.0 vCPU and 2.0 GiB RAM Container Apps allocation sizing.
+  - Measured container cold start latency: 5–7 seconds from idle/cold to serving live requests.
+  - Hardened database connection URL parser in `app/db/session.py` to strip surrounding single or double quotes, preventing parsing crashes when environment variables are injected with quotes.
+  - Added regression tests in `tests/test_database.py` verifying quote-stripped database URL normalization.
+  - Validated Firebase server-side authentication configuration and fail-closed RBAC policy.
+  - Formulated Azure deployment blueprint: Azure Container Apps consumption tier (`minReplicas = 0`, `maxReplicas = 1`), Azure Static Web Apps Free tier, private GitHub Container Registry (GHCR) with token authentication, and East US region placement for low cross-cloud latency to Neon.
+  - Automated test suites pass with zero regressions: **297 backend tests passing in 15.52s** and **31 frontend tests passing in 156ms**.
 - **Increment 4D: Azure Deployment Readiness and Docker Image Optimization**
   - Inspected Docker image layers and diagnosed image bloat: identified ~4.1 GB of unused NVIDIA CUDA and Triton runtime binaries included by default PyTorch wheels.
   - Optimized `Dockerfile` to install CPU-optimized PyTorch wheels via `--extra-index-url https://download.pytorch.org/whl/cpu`, reducing `pip install` layer size from 6.54 GB to 1.82 GB.

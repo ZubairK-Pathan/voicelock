@@ -73,6 +73,8 @@ def test_database_url_dialect_normalization():
     assert normalize_database_url("postgresql://usr:pwd@host/db") == "postgresql+psycopg://usr:pwd@host/db"
     assert normalize_database_url("postgresql+psycopg2://usr:pwd@host/db") == "postgresql+psycopg://usr:pwd@host/db"
     assert normalize_database_url("postgresql+psycopg://usr:pwd@host/db") == "postgresql+psycopg://usr:pwd@host/db"
+    assert normalize_database_url('"postgresql://usr:pwd@host/db"') == "postgresql+psycopg://usr:pwd@host/db"
+    assert normalize_database_url("'postgres://usr:pwd@host/db'") == "postgresql+psycopg://usr:pwd@host/db"
     assert normalize_database_url("sqlite:///./test.db") == "sqlite:///./test.db"
 
 

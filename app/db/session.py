@@ -35,7 +35,7 @@ def normalize_database_url(url: str) -> str:
     - postgresql:// -> postgresql+psycopg://
     - postgresql+psycopg2:// -> postgresql+psycopg://
     """
-    clean_url = url.strip()
+    clean_url = url.strip().strip("'\"")
     if clean_url.startswith("postgres://"):
         return "postgresql+psycopg://" + clean_url[len("postgres://"):]
     if clean_url.startswith("postgresql://") and not clean_url.startswith("postgresql+"):
