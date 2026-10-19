@@ -22,26 +22,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create unprivileged application user and group
+# Create unprivileged application user and initialize home directory
 RUN groupadd -g 10001 voicelock && \
-    useradd -u 10001 -g voicelock -s /bin/bash -m voicelock
+    useradd -u 10001 -g voicelock -s /bin/bash -m voicelock && \
+    mkdir -p /home/voicelock/.cache && \
+    chown -R voicelock:voicelock /home/voicelock
 
-# Set application working directory and HuggingFace cache directory
+# Set application working directory
 WORKDIR /app
+RUN chown -R voicelock:voicelock /app
 ENV HF_HOME=/home/voicelock/.cache/huggingface
 
 # Copy dependency specifications first to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies with CPU-optimized PyTorch wheels
+# eliminating over 4 GB of unused CUDA/NVIDIA binaries on CPU container runtimes
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
-# Copy application source code (filtered strictly by .dockerignore)
-COPY . .
-
-# Assign full ownership of application files and user home to non-root user
-RUN chown -R voicelock:voicelock /app /home/voicelock
+# Copy application source code directly owned by voicelock user
+COPY --chown=voicelock:voicelock . .
 
 # Switch to unprivileged runtime user before model warmup so cache is created under user home
 USER voicelock

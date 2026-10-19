@@ -10,6 +10,23 @@ and this project adheres to Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- **Increment 4D: Azure Deployment Readiness and Docker Image Optimization**
+  - Inspected Docker image layers and diagnosed image bloat: identified ~4.1 GB of unused NVIDIA CUDA and Triton runtime binaries included by default PyTorch wheels.
+  - Optimized `Dockerfile` to install CPU-optimized PyTorch wheels via `--extra-index-url https://download.pytorch.org/whl/cpu`, reducing `pip install` layer size from 6.54 GB to 1.82 GB.
+  - Optimized file copying with `COPY --chown=voicelock:voicelock . .`, eliminating an entire 61.6 MB duplicate chown layer.
+  - Expanded `.dockerignore` to exclude raw dataset recordings (`dataset/`, 56 MB), speaker profile pickles (`speaker_profiles/`, `*.pkl`), and local documentation, reducing build context transfer from 60.69 MB to 196.91 kB.
+  - Built optimized image with tag `voicelock-api:readiness-test` (ID `0918f69e0725`), reducing uncompressed content size from **3.9 GB to 830 MB (79% reduction)**.
+  - Conducted complete production configuration audit across Firebase Auth, Neon PostgreSQL, CORS origin filtering, and server-side secret management.
+  - Verified runtime execution in test container:
+    - Non-root UID 10001 (voicelock) confirmed on PID 1.
+    - Public discovery probe `GET /` verified returning HTTP 200 OK.
+    - Docker container health check transitioning to `healthy`.
+    - SpeechBrain ECAPA-TDNN 192-d embedding extraction and Vosk STT small model validated loading completely offline.
+    - OS dependency `/usr/bin/ffmpeg` and `soundfile` verified operational.
+    - Production fail-closed behavior verified for unauthenticated and forged requests.
+    - Container logs verified free of credentials, connection strings, and unhandled exceptions.
+  - Authored comprehensive Azure deployment architecture and cost-control plan in `azure_deployment_readiness_plan.md` targeting Azure Static Web Apps, Azure Container Apps, and Neon PostgreSQL with scale-to-zero settings.
+  - Automated test suites pass with zero regressions: **297 backend tests passing in 16.79s** and **31 frontend tests passing in 158ms**.
 - **Increment 4C: Docker Build and Runtime Validation**
   - Built local Linux Docker backend image `voicelock-api:local-test` on Docker Desktop (`linux/arm64`, 3.9GB unpacked).
   - Diagnosed and resolved cache permission boundary condition: updated `Dockerfile` to set `HF_HOME=/home/voicelock/.cache/huggingface`, chown `/home/voicelock`, and switch to `USER voicelock` prior to model warmup so all cache files and HuggingFace Hub symlinks are owned by UID 10001, eliminating `PermissionError` at runtime.

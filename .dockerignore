@@ -22,8 +22,11 @@ voicelock.db
 *.sqlite3
 
 # Audio recordings & raw datasets
+dataset/
 processed_dataset/
 recordings/
+speaker_profiles/
+*.pkl
 *.wav
 *.mp3
 *.m4a
