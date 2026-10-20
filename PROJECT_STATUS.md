@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 20, 2026  
-**Current Milestone:** Increment 4F — Environment Variable Credential Fallback for Serverless Container Deployment (Completed)  
+**Current Milestone:** Increment 4G — Production Backend Deployment & Admin Authorization on Azure Container Apps (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (Support for in-memory FIREBASE_CREDENTIALS_JSON fallback validated; 303 backend tests passing in 17.58s; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 35 backend tests and 31 frontend tests passing; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 4E validates the optimized VoiceLock Docker container image against the live Neon PostgreSQL database (`sweet-block-01674817`) and prepares the end-to-end Azure production deployment plan across Azure Container Apps (backend), Azure Static Web Apps (frontend), and GitHub Container Registry (GHCR). A realistic runtime test inside a Linux container verified that the application securely connects to Neon over TLS, pre-warms all 10 enrolled speaker profiles from the database, and responds to public discovery probes on `GET /` with HTTP 200 OK without leaking connection strings or credentials. Live container telemetry measured an idle memory footprint of 505.2 MiB (reaching 650–750 MiB during peak ML inference) and 0.26% CPU utilization, confirming a right-sized Container Apps allocation of 1.0 vCPU and 2.0 GiB RAM. Database URL parsing was hardened in `app/db/session.py` to strip surrounding quotes from environment variables. A thorough cost, quota, and authentication analysis verified that using ACA scale-to-zero (`minReplicas = 0`) and SWA Free tier keeps recurring hosting costs at $0.00/month within the Azure for Students free monthly consumption grants (180,000 vCPU-seconds and 360,000 GiB-seconds free). All 297 backend tests pass in 15.52s, 31 frontend tests pass in 156ms, and the working tree is clean. Provisioning commands and deployment blueprints are fully prepared and awaiting explicit user authorization before execution.
+Increment 4G successfully deploys the VoiceLock FastAPI backend (`voicelock-api`) to the existing Azure Container Apps Express environment (`voicelock-env`) in `eastasia` using immutable AMD64 image digest `sha256:52b774f003d11eaad6c43a91ba061ec7fd1a65c769c7978a6db7a7bae00d9db3`. Ingestion of Neon database connection strings and Firebase credentials was executed via secure in-memory process substitution streaming without leaking credentials to disk, CLI args, or logs. The administrator authorization whitelist was updated with `ADMIN_EMAILS=pzubair580@gmail.com` and verified to fail closed against unauthenticated and invalid tokens. SWA routing fallback configuration (`staticwebapp.config.json`) was added to the React frontend to support SPA deep linking and microphone access permissions.
 
 
 ---
