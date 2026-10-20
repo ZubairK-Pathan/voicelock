@@ -2,13 +2,20 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
 import type { User as FirebaseUser } from 'firebase/auth';
-import { auth, isFirebaseConfigured } from '../lib/firebase';
+import { auth, googleAuthProvider, isFirebaseConfigured } from '../lib/firebase';
 import { AuthContext, DEMO_SESSION_KEY } from './authContextDef';
 import type { AppUser } from './authContextDef';
+import {
+  resolveUserRole,
+  mapFirebaseError,
+  createDemoGoogleUser,
+  createDemoEmailUser,
+} from './authUtils';
 
 function getInitialDemoUser(): AppUser | null {
   if (typeof window === 'undefined') return null;
@@ -38,17 +45,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setFirebaseUser(fbUser);
       if (fbUser) {
-        let role: 'admin' | 'user' = 'user';
+        let claims: Record<string, unknown> | undefined;
         try {
           const tokenResult = await fbUser.getIdTokenResult();
-          if (tokenResult.claims.admin === true || tokenResult.claims.role === 'admin') {
-            role = 'admin';
-          } else if (fbUser.email?.includes('admin')) {
-            role = 'admin';
-          }
+          claims = tokenResult.claims as Record<string, unknown>;
         } catch {
-          role = fbUser.email?.includes('admin') ? 'admin' : 'user';
+          claims = undefined;
         }
+
+        const role = resolveUserRole(fbUser.email, claims);
 
         setUser({
           uid: fbUser.uid,
@@ -66,25 +71,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, [isConfigured]);
 
-  const mapFirebaseError = (errCode: string): string => {
-    switch (errCode) {
-      case 'auth/invalid-credential':
-      case 'auth/wrong-password':
-      case 'auth/user-not-found':
-        return 'Invalid email or password. Please verify your credentials.';
-      case 'auth/invalid-email':
-        return 'Please enter a valid operator email address.';
-      case 'auth/user-disabled':
-        return 'This operator account has been suspended or revoked.';
-      case 'auth/too-many-requests':
-        return 'Access temporarily blocked due to multiple failed attempts. Please retry later.';
-      case 'auth/network-request-failed':
-        return 'Network connection failed. Verify server and internet connectivity.';
-      default:
-        return 'Authentication failed. Please verify credentials or check project settings.';
-    }
-  };
-
   const signIn = async (email: string, pass: string): Promise<void> => {
     setError(null);
     setLoading(true);
@@ -95,18 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         // Simulated local authentication when Firebase environment variables are not set
         await new Promise((resolve) => setTimeout(resolve, 500));
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const isAdmin = normalizedEmail.includes('admin') || normalizedEmail.includes('zubair');
-
-        const demoUser: AppUser = {
-          uid: `demo_usr_${Math.random().toString(36).substring(2, 10)}`,
-          email: normalizedEmail,
-          displayName: normalizedEmail.split('@')[0],
-          role: isAdmin ? 'admin' : 'user',
-          isDemoUser: true,
-        };
-
+        const demoUser = createDemoEmailUser(email);
         sessionStorage.setItem(DEMO_SESSION_KEY, JSON.stringify(demoUser));
         setUser(demoUser);
       }
@@ -115,6 +90,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const friendlyMessage = errObject.code
         ? mapFirebaseError(errObject.code)
         : errObject.message || 'Failed to authenticate.';
+      setError(friendlyMessage);
+      throw new Error(friendlyMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const signInWithGoogle = async (): Promise<void> => {
+    setError(null);
+    setLoading(true);
+
+    try {
+      if (isConfigured && auth) {
+        await signInWithPopup(auth, googleAuthProvider);
+      } else {
+        // Simulated Google authentication for demo mode
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const demoUser = createDemoGoogleUser();
+        sessionStorage.setItem(DEMO_SESSION_KEY, JSON.stringify(demoUser));
+        setUser(demoUser);
+      }
+    } catch (err: unknown) {
+      const errObject = err as { code?: string; message?: string };
+      const friendlyMessage = errObject.code
+        ? mapFirebaseError(errObject.code)
+        : errObject.message || 'Failed to authenticate with Google.';
       setError(friendlyMessage);
       throw new Error(friendlyMessage);
     } finally {
@@ -161,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error,
         isConfigured,
         signIn,
+        signInWithGoogle,
         signOut,
         getIdToken,
         clearError,
@@ -170,3 +172,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthContext.Provider>
   );
 }
+

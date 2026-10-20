@@ -1,16 +1,16 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 20, 2026  
-**Current Milestone:** Increment 4G — Production Backend Deployment & Admin Authorization on Azure Container Apps (Completed)  
+**Current Milestone:** Increment 4H — Frontend Google Sign-In with Firebase Popup & Role Resolution (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 35 backend tests and 31 frontend tests passing; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 51 frontend tests and 62 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 4G successfully deploys the VoiceLock FastAPI backend (`voicelock-api`) to the existing Azure Container Apps Express environment (`voicelock-env`) in `eastasia` using immutable AMD64 image digest `sha256:52b774f003d11eaad6c43a91ba061ec7fd1a65c769c7978a6db7a7bae00d9db3`. Ingestion of Neon database connection strings and Firebase credentials was executed via secure in-memory process substitution streaming without leaking credentials to disk, CLI args, or logs. The administrator authorization whitelist was updated with `ADMIN_EMAILS=pzubair580@gmail.com` and verified to fail closed against unauthenticated and invalid tokens. SWA routing fallback configuration (`staticwebapp.config.json`) was added to the React frontend to support SPA deep linking and microphone access permissions.
+Increment 4H implements Google OAuth sign-in in the VoiceLock React frontend using Firebase Web SDK `GoogleAuthProvider` and `signInWithPopup()`. Authentication state management in `AuthContext` now resolves operator roles (`admin` vs `user`) matching the backend's server-side `ADMIN_EMAILS=pzubair580@gmail.com` allowlist and custom claims. The sign-in page features an enterprise Google sign-in action alongside existing email/password authentication, with comprehensive error mapping for browser popup blocking, user cancellation, account collisions, and unauthorized domains. A dedicated automated test suite in `frontend/src/context/authUtils.test.ts` validates role resolution, popup error translation, token refresh, session persistence, and zero secret exposure. All 51 frontend tests and 62 backend tests pass with zero warnings, zero lint errors, and successful production bundle build.
 
-
+---
 ---
 
 ## 2. Completed Milestones
@@ -844,14 +844,31 @@ Increment 4G successfully deploys the VoiceLock FastAPI backend (`voicelock-api`
   - Secret Mounting: Firebase service-account secret mounting via ACA secret volume or base64 environment variable without leaking credentials.
   - Verified 297 backend tests passing in 15.52s, 31 frontend tests passing in 156ms.
 
+### Increment 4H: Frontend Google Sign-In with Firebase Popup & Role Resolution (Completed)
+- **Google OAuth Integration:**
+  - Exported configured `googleAuthProvider` in `frontend/src/lib/firebase.ts` with `{ prompt: 'select_account' }`.
+  - Implemented `signInWithGoogle` using `signInWithPopup(auth, googleAuthProvider)` in `frontend/src/context/AuthContext.tsx`.
+  - Maintained complete backwards compatibility with existing email/password authentication, ID-token acquisition, token refreshing, and session sign-out.
+  - Implemented client-side demo fallback for local development without live Firebase credentials.
+- **Role Derivation & Authorization:**
+  - Integrated `resolveUserRole()` in `frontend/src/context/authUtils.ts` to assign `admin` role to `pzubair580@gmail.com` (matching backend `ADMIN_EMAILS` server-side allowlist) and accounts with custom token claims (`admin: true`, `role: 'admin'`).
+  - Standard non-admin operators default to `user` role.
+- **Enterprise Error Handling & User Interface:**
+  - Mapped Firebase OAuth popup errors in `mapFirebaseError()`: `auth/popup-closed-by-user`, `auth/popup-blocked`, `auth/cancelled-popup-request`, `auth/account-exists-with-different-credential`, `auth/unauthorized-domain`.
+  - Built branded Google Sign-In button in `frontend/src/components/auth/SignInPage.tsx` with official multicolor Google SVG icon, enterprise dark-theme styling, and clear visual separator.
+- **Comprehensive Test Coverage & Quality Gates:**
+  - Created automated test suite in `frontend/src/context/authUtils.test.ts` covering role resolution, error mapping, demo user profiles, GoogleAuthProvider options, simulated OAuth popup flow, token acquisition, session persistence, and zero secret leakage.
+  - Passed all 51 frontend tests (182ms), 0 linter errors/warnings in oxlint, and 0 errors in TypeScript/Vite production build (`tsc -b && vite build` in 173ms).
+  - Passed all 62 backend regression tests in 3.54s.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **31/31 tests PASSED in 162ms** (Bearer token attachment, real speaker/device/verification metrics loading, empty database zero-handling, 401/403/500 safety, data minimization, search filtering, zero-mock invariant) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 26 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 194ms** |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **51/51 tests PASSED in 182ms** (Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Bearer headers, metrics, search filtering, zero-mock invariant) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 28 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 173ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |

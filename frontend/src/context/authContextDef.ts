@@ -14,6 +14,7 @@ export interface AuthContextType {
   error: string | null;
   isConfigured: boolean;
   signIn: (email: string, pass: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   clearError: () => void;
