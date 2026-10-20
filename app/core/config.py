@@ -78,7 +78,7 @@ def load_max_audio_size() -> int:
 
 SERVER_THRESHOLD = load_server_threshold()
 MAX_AUDIO_SIZE_BYTES = load_max_audio_size()
-ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
+ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".webm"}
 
 DEFAULT_CHALLENGE_TTL_SECONDS = 60
 DEFAULT_CHALLENGE_LENGTH = 3

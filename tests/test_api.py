@@ -187,6 +187,18 @@ def test_unsupported_audio_extension():
     assert "unsupported" in response.json()["detail"].lower()
 
 
+def test_webm_audio_extension_accepted():
+    """Verify that .webm audio uploads are allowed and not rejected by the extension whitelist."""
+    with patch("cloud_api.predict_speaker", return_value={"predicted_speaker": "Zubair", "similarity": 0.88, "is_accepted": True, "is_unknown": False, "all_scores": {"Zubair": 0.88}, "threshold_used": 0.25}):
+        response = client.post(
+            "/identify",
+            files={"audio": ("recording.webm", io.BytesIO(b"\x1a\x45\xdf\xa3dummywebmbytes"), "audio/webm")},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["predicted_speaker"] == "Zubair"
+
+
 def test_oversized_audio_rejected_before_inference():
     """
     Security check: Upload exceeding MAX_AUDIO_SIZE_BYTES must return 413 Payload Too Large

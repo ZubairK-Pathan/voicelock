@@ -25,7 +25,7 @@ PROCESSED_DIR = PROJECT_ROOT / "processed_dataset"
 PROFILES_DIR = PROJECT_ROOT / "speaker_profiles"
 RESULTS_DIR = PROJECT_ROOT / "results"
 
-SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma"}
+SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".webm"}
 SOUNDFILE_EXTENSIONS = {".wav", ".flac", ".ogg"}
 TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1  # mono

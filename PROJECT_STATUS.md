@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 21, 2026  
-**Current Milestone:** Increment 5B — Browser Audio Recording Hook & Lifecycle Management (Completed)  
+**Current Milestone:** Increment 5C — Real Backend-Driven Voice Verification UI & WebM Audio Decoding (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 84 frontend tests and 50+ backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 96 frontend tests and 304 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 5B implements a reusable, thoroughly tested React audio-recording hook (`useAudioRecorder`) and lifecycle controller (`AudioRecorderController`) in `frontend/src/hooks/useAudioRecorder.ts`. The implementation captures real browser microphone audio using `navigator.mediaDevices.getUserMedia` and `MediaRecorder`. It strictly requests microphone permissions on explicit user action (never on mount or instantiation), performs runtime MIME type negotiation via `MediaRecorder.isTypeSupported()`, and preserves accurate MIME types and extensions (`.webm`, `.ogg`, `.m4a`, etc.) without falsifying audio formats. The hook manages recording state transitions (`idle`, `requesting`, `recording`, `stopped`, `error`), tracks elapsed recording duration, enforces a configurable maximum recording duration ceiling with auto-stop, and ensures comprehensive resource cleanup by stopping all media stream tracks on stop, cancellation, and unmount. Recordings with zero bytes fail closed, and browser permission rejections, missing hardware, unsupported APIs, and internal recorder errors are translated into clear, actionable UI messages. Concurrency protections prevent duplicate starts and stream leaks. In accordance with privacy and security mandates, audio is never written to disk, `localStorage`, or `IndexedDB`, and no audio bytes or biometric data are logged. 19 automated tests in `frontend/src/hooks/useAudioRecorder.test.ts` validate all 11 lifecycle, security, and edge-case requirements, bringing the frontend test suite to 84 passing tests with 0 linter warnings and a clean production build. Per strict increment boundaries, `VerificationPage.tsx` was not modified and no audio upload was performed.
+Increment 5C replaces the prototype verification simulator in `frontend/src/components/pages/VerificationPage.tsx` with a real, end-to-end, API-driven voice verification flow. All fake scenario selectors (`genuine`, `impostor`, `spoof`), mocked success states, and client-side random digit generation were completely purged. The application now requests unpredictable, cryptographically generated spoken challenges from `POST /challenge`, presents the server digits with live 60-second TTL countdowns, captures genuine microphone audio via `useAudioRecorder`, provides waveform review and discard/re-record workflows, and submits real audio blobs with session and challenge bindings to `POST /verify`. Backend audio compatibility was established by adding `.webm` to `ALLOWED_EXTENSIONS` in `app/core/config.py` and `SUPPORTED_AUDIO_EXTENSIONS` in `audio_utils.py`, supported by FFmpeg's native Matroska/WebM demuxer and `libopus` decoder. Ordinary users without an authorized record in `UserSpeakerMapping` are presented with a clear, fail-closed access denial state explaining the administrative setup required, while administrators can verify enrolled speaker profiles retrieved live from `GET /speakers`. 12 automated tests in `frontend/src/components/pages/VerificationPage.test.ts` and new backend tests in `tests/test_api.py` validate all challenge display, recording, multipart submission, liveness rejection, impostor denial, unmapped identity fail-closed, and zero-mock invariants. All 96 frontend tests and 304 backend tests pass with 0 linter warnings and a clean production build.
 
 ---
 
@@ -900,14 +900,39 @@ Increment 5B implements a reusable, thoroughly tested React audio-recording hook
   - Tests verify: permission prompt on user action only, valid non-empty blob generation with accurate MIME types/extensions, browser MIME resolution, state transitions, permission denials, missing hardware, unsupported APIs, unsupported MIME formats, 0-byte fail-closed rejection, internal recorder errors, max duration auto-stop, track stopping on stop/cancel/destroy, concurrency safety, and zero localStorage/IndexedDB access.
   - Full frontend suite: 84/84 tests pass cleanly in ~390ms with 0 linter warnings and clean Vite build.
 
+### Increment 5C: Real Backend-Driven Voice Verification UI & WebM Audio Decoding (Completed)
+- **Real Backend-Driven UI Architecture (`VerificationPage.tsx`):**
+  - Completely replaced the prototype verification simulator with live API-driven authentication.
+  - Purged all mock data imports (`MOCK_SPEAKERS`, `MOCK_DEVICES` from `mockData.ts`), fake simulation state machines (`'genuine' | 'impostor' | 'spoof'`), simulated waveform bars, and client-side `Math.random()` digit generation.
+  - Integrates `POST /challenge` via `apiClient.createChallenge()`, generating an unpredictable 3-digit CSPRNG sequence bound to a unique `session_id` with 60s Time-to-Live.
+  - Live TTL countdown timer automatically marks the challenge as expired and burned when time elapses, preventing submissions of stale or invalid tokens.
+- **Genuine Browser Microphone Recording Integration:**
+  - Integrates the reusable `useAudioRecorder` hook; audio hardware access is requested strictly upon explicit user interaction ("Start Microphone Recording").
+  - Provides audio playback preview via scoped `URL.createObjectURL` (cleanly revoked on unmount), audio metadata indicators (extension, container MIME type, duration, size in KB), and a "Discard & Re-Record" workflow.
+  - Submits genuine audio payloads as `multipart/form-data` via `apiClient.verify()` with automatic boundary generation, binding `claimed_identity`, `challenge_id`, and `session_id`.
+  - Single-attempt invalidation: burns the local challenge immediately upon submission, preventing accidental duplicate or replay attempts.
+- **Backend WebM/Opus Decoding Support:**
+  - Expanded `ALLOWED_EXTENSIONS` in `app/core/config.py` and `SUPPORTED_AUDIO_EXTENSIONS` in `audio_utils.py` to include `.webm`.
+  - Proved that FFmpeg's native Matroska/WebM demuxer and `libopus` decoder convert browser WebM/Opus recordings cleanly to 16kHz mono PCM16 WAV in `audio_utils.load_audio()` and `liveness.transcribe_audio()`.
+  - Added automated backend regression test `test_webm_audio_extension_accepted` in `tests/test_api.py`.
+- **Identity Authorization & Fail-Closed Behavior:**
+  - Preserved server-side role and mapping boundaries: ordinary authenticated users have no arbitrary speaker dropdown and are resolved strictly via `UserSpeakerMapping` in the database.
+  - If an ordinary user has no mapping in `UserSpeakerMapping` (confirmed 0 mappings in database), the backend returns HTTP 403, and the UI transitions to a dedicated, prominent **Unmapped Voice Identity** fail-closed alert state detailing the required administrator setup.
+  - Administrators are authorized to challenge and verify registered speaker profiles loaded live from `GET /speakers`.
+- **Zero-Fabrication & Automated Test Suite:**
+  - Renders verdicts, similarities, and liveness states strictly from the live backend response. Any error (400, 401, 403, 422, 500, network disconnect) fails closed with clear denial banners and never displays an UNLOCK verdict.
+  - Added 12 comprehensive unit and integration tests in `frontend/src/components/pages/VerificationPage.test.ts` covering challenge display, real recording upload, genuine unlock, liveness denial, impostor denial, unmapped user 403, expired challenges, empty audio, HTTP errors, network failures, and zero-mock AST invariants.
+  - All 96 frontend tests and 304 backend tests pass with 0 linter warnings and clean production build.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **84/84 tests PASSED in 390ms** (Audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, error translation, concurrency safety, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering, zero-mock invariant) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 30 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 137ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **96/96 tests PASSED in 401ms** (VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 31 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 100ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **304/304 tests PASSED in 15.19s** (36 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database + WebM upload support) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
@@ -919,7 +944,6 @@ Increment 5B implements a reusable, thoroughly tested React audio-recording hook
 | **Speaker Seeder Suite** | `.venv/bin/pytest tests/test_seed_speakers.py -v` | 0 | **17/17 tests PASSED in 1.15s** (Synthetic seeding, sample count metadata, excluded keys, validation, dry-run, idempotency, conflict aborts, rollback) |
 | **Embedding Validation Suite** | `.venv/bin/pytest tests/test_embeddings.py -v` | 0 | **17/17 tests PASSED in 1.09s** (Roundtrip, float32 precision, cosine similarity >= 0.999999, NaN/Inf rejection, non-numeric rejection, privacy guarantees) |
 | **Speaker Repository Suite** | `.venv/bin/pytest tests/test_speaker_repository.py -v` | 0 | **20/20 tests PASSED in 0.82s** (Embedding persistence, get_embedding, set_embedding, invalid dimension rejection, rollback) |
-| **Full Automated Test Suite** | `.venv/bin/pytest -v` | 0 | **296/296 tests PASSED in 14.52s** (35 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database) |
 | **Live Neon PostgreSQL Connectivity** | Direct SQLAlchemy 2.0 + psycopg 3 TLS query | 0 | Connected to `neondb` on PostgreSQL 18.6 in `aws-us-east-2`, verified all 7 tables, queried repositories |
 | **Live Uvicorn Server Smoke Test** | `uvicorn app.main:app` + HTTP probe `GET /` | 0 | HTTP 200 OK, `status: "online"`, `version: "1.0.0"` |
 | **Model Inference** | `.venv/bin/python predict.py "processed_dataset/Zubair/Zubair_Enrollment_R01.wav"` | 0 | Identifies `Zubair` (Score: 0.8668, Margin: +0.6073) |
