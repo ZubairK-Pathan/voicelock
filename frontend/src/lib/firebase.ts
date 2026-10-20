@@ -12,26 +12,21 @@ export interface FirebaseWebConfig {
   appId: string;
 }
 
-const env =
-  typeof import.meta !== 'undefined' && import.meta.env
-    ? (import.meta.env as Record<string, string | undefined>)
-    : {};
-
 export const firebaseConfig: FirebaseWebConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY || '',
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: env.VITE_FIREBASE_APP_ID || '',
+  apiKey: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_API_KEY : '') || '',
+  authDomain: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_AUTH_DOMAIN : '') || '',
+  projectId: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_PROJECT_ID : '') || '',
+  storageBucket: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_STORAGE_BUCKET : '') || '',
+  messagingSenderId: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID : '') || '',
+  appId: (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_FIREBASE_APP_ID : '') || '',
 };
 
 /**
  * Validates whether client-side Firebase environment variables are provided.
  * Rejects empty or placeholder configuration values.
  */
-export function isFirebaseConfigured(): boolean {
-  const { apiKey, projectId } = firebaseConfig;
+export function isFirebaseConfigured(config: FirebaseWebConfig = firebaseConfig): boolean {
+  const { apiKey, projectId } = config;
   if (!apiKey || !projectId) return false;
   if (apiKey.includes('your_firebase') || apiKey.includes('placeholder')) return false;
   return true;

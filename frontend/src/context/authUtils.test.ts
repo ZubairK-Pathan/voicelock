@@ -11,7 +11,7 @@ import {
   ADMIN_EMAIL_WHITELIST,
 } from './authUtils.ts';
 import { DEMO_SESSION_KEY } from './authContextDef.ts';
-import { googleAuthProvider } from '../lib/firebase.ts';
+import { googleAuthProvider, isFirebaseConfigured } from '../lib/firebase.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -203,6 +203,85 @@ describe('Google Sign-In & Authentication Utilities Suite', () => {
       );
       assert.ok(apiClientFile.includes('VITE_API_BASE_URL'));
       assert.strictEqual(expectedProdApiUrl.startsWith('https://voicelock-api.'), true);
+    });
+
+    test('verifies firebase.ts accesses VITE_FIREBASE_* directly for Vite static inlining', () => {
+      const firebaseFile = readFileSync(
+        resolve(__dirname, '../lib/firebase.ts'),
+        'utf-8'
+      );
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_API_KEY'));
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_AUTH_DOMAIN'));
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_PROJECT_ID'));
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_STORAGE_BUCKET'));
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID'));
+      assert.ok(firebaseFile.includes('import.meta.env.VITE_FIREBASE_APP_ID'));
+    });
+  });
+
+  describe('Firebase Configuration & Demo-Mode Detection (isFirebaseConfigured)', () => {
+    test('identifies valid production Firebase credentials as configured', () => {
+      const validConfig = {
+        apiKey: 'AIzaSyDTjTXsii9_1Be-pr0Zb3FCQbNkuaAn2Ic',
+        authDomain: 'voice-lock-7c111.firebaseapp.com',
+        projectId: 'voice-lock-7c111',
+        storageBucket: 'voice-lock-7c111.firebasestorage.app',
+        messagingSenderId: '654002366706',
+        appId: '1:654002366706:web:d7f17efd25121f2971886b',
+      };
+      assert.strictEqual(isFirebaseConfigured(validConfig), true);
+    });
+
+    test('detects missing apiKey or projectId as unconfigured demo mode', () => {
+      assert.strictEqual(
+        isFirebaseConfigured({
+          apiKey: '',
+          authDomain: 'voice-lock-7c111.firebaseapp.com',
+          projectId: 'voice-lock-7c111',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: '',
+        }),
+        false
+      );
+
+      assert.strictEqual(
+        isFirebaseConfigured({
+          apiKey: 'AIzaSyDTjTXsii9_1Be-pr0Zb3FCQbNkuaAn2Ic',
+          authDomain: 'voice-lock-7c111.firebaseapp.com',
+          projectId: '',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: '',
+        }),
+        false
+      );
+    });
+
+    test('rejects placeholder config values as unconfigured demo mode', () => {
+      assert.strictEqual(
+        isFirebaseConfigured({
+          apiKey: 'your_firebase_web_api_key_here',
+          authDomain: 'voice-lock-7c111.firebaseapp.com',
+          projectId: 'voice-lock-7c111',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: '',
+        }),
+        false
+      );
+
+      assert.strictEqual(
+        isFirebaseConfigured({
+          apiKey: 'placeholder_api_key',
+          authDomain: 'voice-lock-7c111.firebaseapp.com',
+          projectId: 'voice-lock-7c111',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: '',
+        }),
+        false
+      );
     });
   });
 });
