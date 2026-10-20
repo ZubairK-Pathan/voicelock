@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 20, 2026  
-**Current Milestone:** Increment 4H — Frontend Google Sign-In with Firebase Popup & Role Resolution (Completed)  
+**Last Updated:** October 21, 2026  
+**Current Milestone:** Increment 5A — Real Verification API Client & Liveness Challenge Integration (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 55 frontend tests and 62 backend tests passing; 0 lint errors; clean production build with static Firebase config inlining; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 65 frontend tests and 50+ backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 4H implements Google OAuth sign-in in the VoiceLock React frontend using Firebase Web SDK `GoogleAuthProvider` and `signInWithPopup()`. Authentication state management in `AuthContext` now resolves operator roles (`admin` vs `user`) matching the backend's server-side `ADMIN_EMAILS=pzubair580@gmail.com` allowlist and custom claims. The sign-in page features an enterprise Google sign-in action alongside existing email/password authentication, with comprehensive error mapping for browser popup blocking, user cancellation, account collisions, and unauthorized domains. Firebase web configuration access in `frontend/src/lib/firebase.ts` was hardened to ensure Vite statically inlines `VITE_FIREBASE_*` variables during production builds while maintaining safe fallback in headless Node.js testing environments. A dedicated automated test suite in `frontend/src/context/authUtils.test.ts` validates role resolution, popup error translation, token refresh, session persistence, configuration validation, and zero secret exposure. All 55 frontend tests and 62 backend tests pass with zero warnings, zero lint errors, and successful production bundle build.
+Increment 5A implements typed frontend API client methods (`createChallenge`, `verify`, and `verifyAudio`) in `frontend/src/lib/apiClient.ts` connecting to the live FastAPI `POST /challenge` and `POST /verify` endpoints. Request and response models strictly adhere to backend Pydantic contracts (`ChallengeRequest`, `ChallengeApiResponse`, `VerifyRequest`, `VerifyApiResponse`). Audio uploads are packaged into multipart `FormData` without manual `Content-Type` headers, enabling the browser and fetch runtime to automatically inject unique multipart boundaries. The client automatically binds Firebase ID tokens via `Authorization: Bearer <ID_TOKEN>` headers while handling 400, 401, 403, 422, and network failures fail-closed. 10 focused automated tests in `frontend/src/lib/apiClient.test.ts` validate endpoint routing, multipart boundary preservation, Bearer token attachment, schema parsing, and the critical security invariant that error responses never manufacture successful verification or unlock verdicts. All 65 frontend tests and 50 backend regression tests pass with 0 lint errors and clean production build.
 
 ---
 
@@ -860,14 +860,29 @@ Increment 4H implements Google OAuth sign-in in the VoiceLock React frontend usi
   - Passed all 51 frontend tests (182ms), 0 linter errors/warnings in oxlint, and 0 errors in TypeScript/Vite production build (`tsc -b && vite build` in 173ms).
   - Passed all 62 backend regression tests in 3.54s.
 
+### Increment 5A: Real Verification API Client & Liveness Challenge Integration (Completed)
+- **Typed Biometric Client Methods:**
+  - Implemented `createChallenge(payload?: ChallengeRequest)` in `frontend/src/lib/apiClient.ts` to request cryptographic spoken liveness challenges from `POST /challenge`.
+  - Implemented `verify(payload: VerifyRequest | FormData)` and alias `verifyAudio()` in `frontend/src/lib/apiClient.ts` to submit audio waveforms and challenge tokens to `POST /verify`.
+  - Defined strict TypeScript interfaces in `frontend/src/types/index.ts` matching backend Pydantic models: `ChallengeRequest`, `ChallengeApiResponse`, `VerifyRequest`, and `VerifyApiResponse`.
+- **Multipart Boundary Preservation & Header Hygiene:**
+  - Enhanced `buildHeaders()` with `isFormData` detection. When sending `FormData`, manual `Content-Type: application/json` is omitted/stripped, ensuring the browser/fetch runtime automatically injects the required `multipart/form-data; boundary=...` header.
+  - Enhanced `request()` and `post()` to pass `FormData` directly without stringifying to JSON.
+  - Enhanced non-2xx error handling to extract FastAPI 422 validation error arrays and 400/401/403 details safely.
+- **Zero-Fabrication Fail-Closed Security Invariant:**
+  - Guaranteed that error responses (400, 401, 403, 404, 422, 500, network errors) strictly return `ok: false` and `data: null`, never manufacturing successful `accepted: true` or `UNLOCK` verdicts.
+- **Automated Test Coverage:**
+  - Added 10 automated unit and integration tests in `frontend/src/lib/apiClient.test.ts` validating `/challenge` and `/verify` endpoints, Bearer token attachment, multipart boundary handling, schema parsing, and all HTTP error pathways.
+  - All 65 frontend tests pass cleanly (172ms), 0 lint errors in oxlint, and clean Vite production build.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **55/55 tests PASSED in 190ms** (Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, Bearer headers, metrics, search filtering, zero-mock invariant) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **65/65 tests PASSED in 172ms** (Challenge generation, multipart verification, boundary preservation, Bearer headers, error handling, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering, zero-mock invariant) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 28 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 179ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js` with inlined Firebase config) |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 101ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |

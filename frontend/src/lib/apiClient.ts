@@ -10,6 +10,10 @@ import type {
   SpeakersApiResponse,
   DevicesApiResponse,
   VerificationMetricsResponse,
+  ChallengeRequest,
+  ChallengeApiResponse,
+  VerifyRequest,
+  VerifyApiResponse,
 } from '../types';
 
 export interface ApiClientConfig {
@@ -56,12 +60,16 @@ export class ApiClient {
    */
   public async buildHeaders(
     customHeaders?: HeadersInit,
-    requiresAuth: boolean = true
+    requiresAuth: boolean = true,
+    isFormData: boolean = false
   ): Promise<Headers> {
     const headers = new Headers(customHeaders || {});
 
-    if (!headers.has('Content-Type')) {
+    if (!isFormData && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
+    } else if (isFormData && headers.has('Content-Type')) {
+      // Do not manually set multipart Content-Type so fetch generates the boundary
+      headers.delete('Content-Type');
     }
 
     if (requiresAuth && this.getTokenFn) {
@@ -89,8 +97,15 @@ export class ApiClient {
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${this.baseUrl}${cleanEndpoint}`;
 
+    const isFormData =
+      typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+
     try {
-      const headers = await this.buildHeaders(fetchOptions.headers, requiresAuth);
+      const headers = await this.buildHeaders(
+        fetchOptions.headers,
+        requiresAuth,
+        isFormData
+      );
 
       const response = await fetch(url, {
         ...fetchOptions,
@@ -100,36 +115,60 @@ export class ApiClient {
       const status = response.status;
       const ok = response.ok;
 
-      if (status === 401) {
-        return {
-          data: null,
-          status,
-          ok: false,
-          error: 'Unauthorized: Missing or invalid authentication token.',
-        };
-      }
-
-      if (status === 403) {
-        return {
-          data: null,
-          status,
-          ok: false,
-          error: 'Forbidden: Insufficient role permissions or speaker identity mismatch.',
-        };
-      }
-
       let data: T | null = null;
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         data = (await response.json()) as T;
       }
 
-      if (!ok) {
-        const errorDetail =
+      if (status === 401) {
+        const detail =
           data && typeof data === 'object' && 'detail' in data
-            ? String((data as { detail: unknown }).detail)
-            : `Request failed with HTTP status ${status}`;
-        return { data: null, status, ok, error: errorDetail };
+            ? `: ${String((data as { detail: unknown }).detail)}`
+            : ': Missing or invalid authentication token.';
+        return {
+          data: null,
+          status,
+          ok: false,
+          error: `Unauthorized${detail}`,
+        };
+      }
+
+      if (status === 403) {
+        const detail =
+          data && typeof data === 'object' && 'detail' in data
+            ? `: ${String((data as { detail: unknown }).detail)}`
+            : ': Insufficient role permissions or speaker identity mismatch.';
+        return {
+          data: null,
+          status,
+          ok: false,
+          error: `Forbidden${detail}`,
+        };
+      }
+
+      if (!ok) {
+        let errorDetail = `Request failed with HTTP status ${status}`;
+        if (data && typeof data === 'object') {
+          if ('detail' in data) {
+            const detail = (data as { detail: unknown }).detail;
+            if (Array.isArray(detail)) {
+              errorDetail = detail
+                .map((d: unknown) => {
+                  if (typeof d === 'object' && d !== null && 'msg' in d) {
+                    return String((d as { msg: unknown }).msg);
+                  }
+                  return JSON.stringify(d);
+                })
+                .join('; ');
+            } else {
+              errorDetail = String(detail);
+            }
+          } else if ('message' in data) {
+            errorDetail = String((data as { message: unknown }).message);
+          }
+        }
+        return { data: null, status, ok: false, error: errorDetail };
       }
 
       return { data, status, ok };
@@ -183,11 +222,68 @@ export class ApiClient {
     body?: unknown,
     options?: RequestInit & { requiresAuth?: boolean }
   ) {
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     return this.request<T>(endpoint, {
       ...options,
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
+      body: isFormData
+        ? (body as FormData)
+        : body !== undefined
+        ? JSON.stringify(body)
+        : undefined,
     });
+  }
+
+  /**
+   * Request a randomized liveness challenge from POST /challenge.
+   * Challenge expires in 60s and is bound to the verification session.
+   */
+  public createChallenge(
+    payload?: ChallengeRequest,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<ChallengeApiResponse>> {
+    return this.post<ChallengeApiResponse>('/challenge', payload || {}, options);
+  }
+
+  /**
+   * Submit recorded audio and challenge tokens to POST /verify.
+   * Accepts either a structured VerifyRequest or an existing FormData object.
+   * Packages fields as multipart/form-data without manual Content-Type header
+   * so browser boundary is preserved.
+   */
+  public verify(
+    payload: VerifyRequest | FormData,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<VerifyApiResponse>> {
+    let formData: FormData;
+
+    if (typeof FormData !== 'undefined' && payload instanceof FormData) {
+      formData = payload;
+    } else {
+      const req = payload as VerifyRequest;
+      formData = new FormData();
+      const filename =
+        req.filename ||
+        (typeof File !== 'undefined' && req.audio instanceof File && req.audio.name
+          ? req.audio.name
+          : 'audio.wav');
+      formData.append('audio', req.audio, filename);
+      formData.append('claimed_identity', req.claimed_identity);
+      formData.append('challenge_id', req.challenge_id);
+      formData.append('session_id', req.session_id);
+    }
+
+    return this.post<VerifyApiResponse>('/verify', formData, options);
+  }
+
+  /**
+   * Alias for verify() to support explicit naming.
+   */
+  public verifyAudio(
+    payload: VerifyRequest | FormData,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<VerifyApiResponse>> {
+    return this.verify(payload, options);
   }
 }
 

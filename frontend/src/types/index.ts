@@ -106,3 +106,36 @@ export interface OverviewMetrics {
   critical_alerts: number;
   avg_latency_ms: number;
 }
+
+export interface ChallengeRequest {
+  claimed_identity?: string;
+  session_id?: string;
+}
+
+export interface ChallengeApiResponse {
+  challenge_id: string;
+  session_id: string;
+  claimed_identity: string | null;
+  digits: string[];
+  display: string;
+  expires_at: number;
+  expires_in_seconds: number;
+}
+
+export interface VerifyRequest {
+  audio: Blob | File;
+  claimed_identity: string;
+  challenge_id: string;
+  session_id: string;
+  filename?: string;
+}
+
+export interface VerifyApiResponse {
+  accepted: boolean;
+  action: 'UNLOCK' | 'DENY';
+  claimed_identity: string;
+  similarity: number;
+  threshold_used: number;
+  liveness_passed: boolean;
+  reason?: string | null;
+}
