@@ -1,14 +1,14 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 21, 2026  
-**Current Milestone:** Increment 5A — Real Verification API Client & Liveness Challenge Integration (Completed)  
+**Current Milestone:** Increment 5B — Browser Audio Recording Hook & Lifecycle Management (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 65 frontend tests and 50+ backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 84 frontend tests and 50+ backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 5A implements typed frontend API client methods (`createChallenge`, `verify`, and `verifyAudio`) in `frontend/src/lib/apiClient.ts` connecting to the live FastAPI `POST /challenge` and `POST /verify` endpoints. Request and response models strictly adhere to backend Pydantic contracts (`ChallengeRequest`, `ChallengeApiResponse`, `VerifyRequest`, `VerifyApiResponse`). Audio uploads are packaged into multipart `FormData` without manual `Content-Type` headers, enabling the browser and fetch runtime to automatically inject unique multipart boundaries. The client automatically binds Firebase ID tokens via `Authorization: Bearer <ID_TOKEN>` headers while handling 400, 401, 403, 422, and network failures fail-closed. 10 focused automated tests in `frontend/src/lib/apiClient.test.ts` validate endpoint routing, multipart boundary preservation, Bearer token attachment, schema parsing, and the critical security invariant that error responses never manufacture successful verification or unlock verdicts. All 65 frontend tests and 50 backend regression tests pass with 0 lint errors and clean production build.
+Increment 5B implements a reusable, thoroughly tested React audio-recording hook (`useAudioRecorder`) and lifecycle controller (`AudioRecorderController`) in `frontend/src/hooks/useAudioRecorder.ts`. The implementation captures real browser microphone audio using `navigator.mediaDevices.getUserMedia` and `MediaRecorder`. It strictly requests microphone permissions on explicit user action (never on mount or instantiation), performs runtime MIME type negotiation via `MediaRecorder.isTypeSupported()`, and preserves accurate MIME types and extensions (`.webm`, `.ogg`, `.m4a`, etc.) without falsifying audio formats. The hook manages recording state transitions (`idle`, `requesting`, `recording`, `stopped`, `error`), tracks elapsed recording duration, enforces a configurable maximum recording duration ceiling with auto-stop, and ensures comprehensive resource cleanup by stopping all media stream tracks on stop, cancellation, and unmount. Recordings with zero bytes fail closed, and browser permission rejections, missing hardware, unsupported APIs, and internal recorder errors are translated into clear, actionable UI messages. Concurrency protections prevent duplicate starts and stream leaks. In accordance with privacy and security mandates, audio is never written to disk, `localStorage`, or `IndexedDB`, and no audio bytes or biometric data are logged. 19 automated tests in `frontend/src/hooks/useAudioRecorder.test.ts` validate all 11 lifecycle, security, and edge-case requirements, bringing the frontend test suite to 84 passing tests with 0 linter warnings and a clean production build. Per strict increment boundaries, `VerificationPage.tsx` was not modified and no audio upload was performed.
 
 ---
 
@@ -875,14 +875,39 @@ Increment 5A implements typed frontend API client methods (`createChallenge`, `v
   - Added 10 automated unit and integration tests in `frontend/src/lib/apiClient.test.ts` validating `/challenge` and `/verify` endpoints, Bearer token attachment, multipart boundary handling, schema parsing, and all HTTP error pathways.
   - All 65 frontend tests pass cleanly (172ms), 0 lint errors in oxlint, and clean Vite production build.
 
+### Increment 5B: Browser Audio Recording Hook & Lifecycle Management (Completed)
+- **Reusable Audio Recorder Hook (`useAudioRecorder`) & Controller (`AudioRecorderController`):**
+  - Implemented `useAudioRecorder` React hook and standalone `AudioRecorderController` class in `frontend/src/hooks/useAudioRecorder.ts`.
+  - Captures genuine browser microphone audio via `navigator.mediaDevices.getUserMedia()` and `MediaRecorder`.
+  - Strictly requests microphone permissions on explicit user invocation (`startRecording()`); never accesses audio hardware on mount or hook instantiation.
+- **Dynamic Runtime MIME Negotiation & Extension Mapping:**
+  - Evaluates candidates via `MediaRecorder.isTypeSupported()` in priority sequence: `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg;codecs=opus`, `audio/ogg`, `audio/mp4`, `audio/aac`, `audio/wav`.
+  - Preserves container integrity with `getMimeExtension(mimeType)` (`.webm`, `.ogg`, `.m4a`, `.aac`, `.wav`), strictly avoiding misrepresenting WebM/Opus byte payloads as WAV.
+- **Robust Lifecycle, State & Error Handling:**
+  - Tracks states: `idle` -> `requesting` -> `recording` -> `stopped` / `error`.
+  - Provides elapsed duration tracking (100ms interval timer) and enforces a configurable maximum recording duration ceiling (default 10s) with automated stop.
+  - Fail-closed error handling: rejects 0-byte recordings (`chunks.length === 0 || totalBytes === 0`), unsupported browser APIs, and internal recorder errors (`recorder.onerror`).
+  - Translates browser errors into actionable user-facing messages: `NotAllowedError` (permission denied), `NotFoundError` (no microphone connected), `NotReadableError` (hardware in use).
+- **Resource Hygiene & Track Cleanup:**
+  - Guaranteed stopping of all `MediaStreamTrack` audio tracks when recording stops normally, is cancelled, encounters an error, or when the component unmounts.
+  - Concurrency guards prevent duplicate start attempts, race conditions, or leaking streams during active or pending sessions.
+- **Privacy & Security Boundaries:**
+  - Zero persistence: recordings are never saved to disk, `localStorage`, or `IndexedDB`.
+  - Zero leakage: raw audio bytes and biometric waveforms are never logged to console or sent over the network.
+  - Strict scope boundary: `VerificationPage.tsx` was not modified and no network audio uploads were performed.
+- **Automated Test Coverage:**
+  - Added 19 comprehensive unit and lifecycle tests in `frontend/src/hooks/useAudioRecorder.test.ts` mocking `MediaStream`, `MediaStreamTrack`, `MediaRecorder`, and timers.
+  - Tests verify: permission prompt on user action only, valid non-empty blob generation with accurate MIME types/extensions, browser MIME resolution, state transitions, permission denials, missing hardware, unsupported APIs, unsupported MIME formats, 0-byte fail-closed rejection, internal recorder errors, max duration auto-stop, track stopping on stop/cancel/destroy, concurrency safety, and zero localStorage/IndexedDB access.
+  - Full frontend suite: 84/84 tests pass cleanly in ~390ms with 0 linter warnings and clean Vite build.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **65/65 tests PASSED in 172ms** (Challenge generation, multipart verification, boundary preservation, Bearer headers, error handling, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering, zero-mock invariant) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 28 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 101ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **84/84 tests PASSED in 390ms** (Audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, error translation, concurrency safety, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering, zero-mock invariant) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 30 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 137ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
