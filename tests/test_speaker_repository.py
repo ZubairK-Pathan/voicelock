@@ -417,3 +417,27 @@ def test_embedding_transaction_rollback(db_session):
     # Embedding was not committed
     assert repo.get_embedding("RollbackEmbedding") is None
 
+
+def test_get_unmapped_active_speakers(db_session):
+    """Verify get_unmapped_active_speakers returns only unmapped speakers with active status."""
+    from app.repositories.user_speaker_repository import UserSpeakerRepository
+    repo = SpeakerRepository(db_session)
+    user_repo = UserSpeakerRepository(db_session)
+
+    repo.create(speaker_id="SpeakerA", status="active")
+    repo.create(speaker_id="SpeakerB", status="active")
+    repo.create(speaker_id="SpeakerC", status="suspended")
+    db_session.commit()
+
+    # Initially both active speakers are unmapped
+    unmapped = repo.get_unmapped_active_speakers()
+    assert [s.speaker_id for s in unmapped] == ["SpeakerA", "SpeakerB"]
+
+    # Map SpeakerA
+    user_repo.create(firebase_uid="uid-a", speaker_id="SpeakerA")
+    db_session.commit()
+
+    # Now only SpeakerB is returned
+    unmapped_after = repo.get_unmapped_active_speakers()
+    assert [s.speaker_id for s in unmapped_after] == ["SpeakerB"]
+

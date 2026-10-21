@@ -215,3 +215,23 @@ def test_list_mappings_and_count(db_session):
     assert len(page2) == 2
     assert page2[0].firebase_uid == "uid_02"
     assert page2[1].firebase_uid == "uid_03"
+
+
+def test_get_by_id_and_delete_by_id(db_session):
+    """Verify primary key retrieval and deletion."""
+    speaker_repo = SpeakerRepository(db_session)
+    user_repo = UserSpeakerRepository(db_session)
+
+    speaker_repo.create(speaker_id="Zubair")
+    mapping = user_repo.create(firebase_uid="uid-pk-test", speaker_id="Zubair")
+    mapping_id = mapping.id
+
+    fetched = user_repo.get_by_id(mapping_id)
+    assert fetched is not None
+    assert fetched.firebase_uid == "uid-pk-test"
+    assert fetched.speaker_id == "Zubair"
+
+    # Delete by ID
+    assert user_repo.delete_by_id(mapping_id) is True
+    assert user_repo.get_by_id(mapping_id) is None
+    assert user_repo.delete_by_id(mapping_id) is False

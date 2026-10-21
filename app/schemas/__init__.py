@@ -6,3 +6,12 @@ from app.schemas.verification import (
     SpeakersResponse,
     HealthResponse,
 )
+from app.schemas.mapping import (
+    CreateMappingRequest,
+    UserSpeakerMappingItem,
+    MappingsListResponse,
+    UnmappedSpeakerItem,
+    UnmappedSpeakersResponse,
+    MappingOperationResponse,
+)
+

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.base import UserSpeakerMapping
 
@@ -50,8 +50,8 @@ class UserSpeakerRepository:
     ) -> UserSpeakerMapping:
         """
         Create and persist a new UserSpeakerMapping in the database.
-        Flushes to the database transaction to verify foreign key and uniqueness constraints.
-        Does NOT commit the transaction.
+        Flushes within a nested savepoint to verify foreign key and uniqueness constraints.
+        Does NOT commit or roll back the caller's outer transaction.
         """
         if not firebase_uid or not firebase_uid.strip():
             raise ValueError("firebase_uid must be a non-empty string.")
@@ -74,9 +74,9 @@ class UserSpeakerRepository:
 
         self.session.add(record)
         try:
-            self.session.flush()
+            with self.session.begin_nested():
+                self.session.flush()
         except IntegrityError as exc:
-            self.session.rollback()
             raise DuplicateUserMappingError(
                 f"Mapping conflict: user '{clean_uid}' or speaker '{clean_speaker_id}' is already mapped or referenced speaker does not exist."
             ) from exc
@@ -122,6 +122,27 @@ class UserSpeakerRepository:
             raise UserMappingNotFoundError(f"Mapping for user '{firebase_uid}' not found.")
         return record
 
+    def get_by_id(self, mapping_id: int) -> Optional[UserSpeakerMapping]:
+        """
+        Retrieve a mapping record by its integer primary key.
+        Returns None if not found.
+        """
+        if not mapping_id:
+            return None
+        return self.session.get(UserSpeakerMapping, mapping_id)
+
+    def delete_by_id(self, mapping_id: int) -> bool:
+        """
+        Remove mapping by integer primary key.
+        Returns True if deleted, False if not found.
+        """
+        record = self.get_by_id(mapping_id)
+        if record is None:
+            return False
+        self.session.delete(record)
+        self.session.flush()
+        return True
+
     def delete_by_firebase_uid(self, firebase_uid: str) -> bool:
         """
         Remove mapping for a user by Firebase UID.
@@ -153,8 +174,13 @@ class UserSpeakerRepository:
     ) -> List[UserSpeakerMapping]:
         """
         List user-to-speaker mappings ordered alphabetically by firebase_uid.
+        Eagerly loads the associated speaker record to avoid N+1 queries.
         """
-        stmt = select(UserSpeakerMapping).order_by(UserSpeakerMapping.firebase_uid)
+        stmt = (
+            select(UserSpeakerMapping)
+            .options(joinedload(UserSpeakerMapping.speaker))
+            .order_by(UserSpeakerMapping.firebase_uid)
+        )
         if offset > 0:
             stmt = stmt.offset(offset)
         if limit is not None and limit > 0:

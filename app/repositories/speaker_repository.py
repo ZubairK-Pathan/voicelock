@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.base import SpeakerRecord
+from app.db.base import SpeakerRecord, UserSpeakerMapping
 from app.core.embeddings import serialize_embedding, deserialize_embedding
 
 
@@ -260,3 +260,16 @@ class SpeakerRepository:
         if active_only:
             stmt = stmt.where(SpeakerRecord.status == "active")
         return self.session.scalar(stmt) or 0
+
+    def get_unmapped_active_speakers(self) -> List[SpeakerRecord]:
+        """
+        Return all enrolled speakers with status='active' that are not mapped in user_speaker_mappings.
+        Ordered alphabetically by speaker_id.
+        """
+        stmt = (
+            select(SpeakerRecord)
+            .outerjoin(UserSpeakerMapping, SpeakerRecord.speaker_id == UserSpeakerMapping.speaker_id)
+            .where(UserSpeakerMapping.speaker_id.is_(None), SpeakerRecord.status == "active")
+            .order_by(SpeakerRecord.speaker_id)
+        )
+        return list(self.session.scalars(stmt).all())

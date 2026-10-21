@@ -26,6 +26,24 @@ and this project adheres to Semantic Versioning.
   - **Verification Quality Gates:** 312 backend tests and 103 frontend tests passing with 0 lint warnings, clean bundle compilation, and 100% ML accuracy on evaluation benchmarks.
 
 ### Added
+- **Increment 2A: Administrator User-to-Speaker Identity Mapping API**
+  - **Pydantic Schemas (`app/schemas/mapping.py`, `app/schemas/__init__.py`):**
+    - Created `CreateMappingRequest`, `UserSpeakerMappingItem`, `MappingsListResponse`, `UnmappedSpeakerItem`, `UnmappedSpeakersResponse`, and `MappingOperationResponse`.
+    - Enforced strict data minimization: biometric embeddings, private credentials, and secret verifiers are strictly excluded from all request and response schemas.
+  - **Admin-Only API Endpoints (`app/api/routes_admin_mappings.py`):**
+    - `GET /admin/mappings`: Lists all active user-speaker mappings with enriched speaker metadata (`full_name`, `status`, `sample_count`).
+    - `GET /admin/mappings/unmapped-speakers`: Lists unmapped enrolled speakers in `active` status eligible for account binding.
+    - `POST /admin/mappings`: Links a Firebase UID to an active speaker identity. Enforces 1-to-1 cardinality with HTTP 409 Conflict rejection for duplicate assignments and HTTP 400/404 for inactive/missing speakers.
+    - `DELETE /admin/mappings/{mapping_id}`: Unlinks a mapping record with guaranteed preservation of the underlying speaker record, biometric embedding, and enrollment audio.
+  - **Audit Logging & Transaction Safety:**
+    - Guaranteed atomic transactions: successful link and unlink operations record an administrative security event (`event_type="admin_action"`, `status="logged"`, `severity="low"`) in the `security_events` table within the same transaction. If audit event logging fails, the mapping change rolls back completely.
+    - Refactored `UserSpeakerRepository.create` to flush within a nested savepoint (`begin_nested()`), preventing `IntegrityError` handling from aborting caller-owned outer transactions.
+  - **Repository Extensions (`user_speaker_repository.py`, `speaker_repository.py`):**
+    - Added `UserSpeakerRepository.get_by_id`, `delete_by_id`, and eager loading (`joinedload`) in `list_mappings` to prevent N+1 queries.
+    - Added `SpeakerRepository.get_unmapped_active_speakers`.
+  - **Targeted Test Coverage (`tests/test_admin_mappings_api.py`):**
+    - Added 16 comprehensive unit and integration tests covering happy paths, 401/403 authorization guards, 409 duplicate conflicts, 404 missing speakers/mappings, 400 inactive speakers, embedding preservation on unlink, atomic audit rollback, and response data minimization.
+    - Added unit tests in `tests/test_user_speaker_repository.py` and `tests/test_speaker_repository.py` expanding full suite to 330 passing tests.
 - **Increment 4F: Environment Variable Credential Fallback for Serverless Container Deployment**
   - Updated `app/core/auth.py` and `app/core/config.py` to support `FIREBASE_CREDENTIALS_JSON` environment variable as a fallback when `FIREBASE_CREDENTIALS_PATH` does not point to a valid file on disk.
   - Enabled serverless container environments (e.g. Azure Container Apps Express mode) to inject Firebase credentials directly into application memory without requiring file volume mounts.

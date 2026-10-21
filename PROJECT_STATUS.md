@@ -1,9 +1,9 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 22, 2026  
-**Current Milestone:** Increment 7D — Fix Verification UI State Fallthrough & Intermittent Liveness Digit Recognition (Completed)  
+**Current Milestone:** Increment 2A — Administrator User-to-Speaker Identity Mapping API (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 103 frontend tests and 312 backend tests passing; 0 lint errors; clean production build with verified inlined Firebase client config; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 103 frontend tests and 330 backend tests passing; 0 lint errors; clean production build with verified inlined Firebase client config; zero secret leakage; clean working tree)
 
 
 ---
@@ -935,8 +935,24 @@ Increment 5C replaces the prototype verification simulator in `frontend/src/comp
 - **Bundle Security Assertions & Regression Testing:**
   - Created typed assertion helper `validateBundleContent` in `frontend/src/lib/bundleValidator.ts` detecting empty API keys, placeholder configurations, and server secret leaks (`private_key_id`, service-account credentials).
   - Added 7 automated unit and regression tests in `frontend/src/context/authUtils.test.ts` verifying empty API key rejection, template literal/quote variations, secret leak detection, and live validation of generated `dist/assets/index-*.js` files on disk.
-  - Fixed test idempotency in `tests/test_metrics_api.py` by guaranteeing cleanup of test fixtures in a `finally` block.
-  - All 103 frontend tests pass cleanly (446ms), 0 linter warnings in oxlint across 32 files, and clean Vite production build in ~100ms with verified inlined Firebase client config.
+### Increment 2A: Administrator User-to-Speaker Identity Mapping API (Completed)
+- **Data Schemas & Minimization (`app/schemas/mapping.py`, `app/schemas/__init__.py`):**
+  - Created `CreateMappingRequest`, `UserSpeakerMappingItem`, `MappingsListResponse`, `UnmappedSpeakerItem`, `UnmappedSpeakersResponse`, and `MappingOperationResponse`.
+  - Enforced strict data minimization: biometric embeddings, private credentials, and secret verifiers are strictly excluded from all request and response schemas.
+- **Admin-Only API Endpoints (`app/api/routes_admin_mappings.py`):**
+  - `GET /admin/mappings`: Lists all active user-speaker mappings with enriched speaker metadata (`full_name`, `status`, `sample_count`).
+  - `GET /admin/mappings/unmapped-speakers`: Lists unmapped enrolled speakers in `active` status eligible for account binding.
+  - `POST /admin/mappings`: Links a Firebase UID to an active speaker identity. Enforces 1-to-1 cardinality with HTTP 409 Conflict rejection for duplicate assignments and HTTP 400/404 for inactive/missing speakers.
+  - `DELETE /admin/mappings/{mapping_id}`: Unlinks a mapping record with guaranteed preservation of the underlying speaker record, biometric embedding, and enrollment audio.
+- **Audit Logging & Transaction Safety:**
+  - Guaranteed atomic transactions: successful link and unlink operations record an administrative security event (`event_type="admin_action"`, `status="logged"`, `severity="low"`) in the `security_events` table within the same transaction. If audit event logging fails, the mapping change rolls back completely.
+  - Refactored `UserSpeakerRepository.create` to flush within a nested savepoint (`begin_nested()`), preventing `IntegrityError` handling from aborting caller-owned outer transactions.
+- **Repository Extensions (`user_speaker_repository.py`, `speaker_repository.py`):**
+  - Added `UserSpeakerRepository.get_by_id`, `delete_by_id`, and eager loading (`joinedload`) in `list_mappings` to prevent N+1 queries.
+  - Added `SpeakerRepository.get_unmapped_active_speakers`.
+- **Targeted Test Coverage (`tests/test_admin_mappings_api.py`):**
+  - Added 16 comprehensive unit and integration tests covering happy paths, 401/403 authorization guards, 409 duplicate conflicts, 404 missing speakers/mappings, 400 inactive speakers, embedding preservation on unlink, atomic audit rollback, and response data minimization.
+  - Added unit tests in `tests/test_user_speaker_repository.py` and `tests/test_speaker_repository.py` expanding full suite to 330 passing tests.
 
 ---
 
@@ -946,7 +962,8 @@ Increment 5C replaces the prototype verification simulator in `frontend/src/comp
 | **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **103/103 tests PASSED in 446ms** (Bundle security & empty apiKey prevention, inlined client config validation, VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
 | **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 32 files |
 | **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 99ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js` with verified non-empty Firebase client config) |
-| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **304/304 tests PASSED in 15.19s** (36 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database + WebM upload support) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -v` | 0 | **330/330 tests PASSED in 16.58s** (16 Admin Mappings API + 8 Liveness Unit + 36 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 21 Speaker Repo + 11 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database + WebM upload support) |
+| **Admin Mappings API Suite** | `.venv/bin/pytest tests/test_admin_mappings_api.py -v` | 0 | **16/16 tests PASSED in 1.20s** (List mappings, unmapped speakers, link success, audit trail, 401/403 guards, 409 duplicate UID/speaker conflicts, 400 inactive speaker, 404 missing speaker/mapping, embedding preservation on unlink, atomic audit rollback, data minimization) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
 | **Verification Route Audit Suite** | `.venv/bin/pytest tests/test_verification_route_audit.py -v` | 0 | **15/15 tests PASSED in 2.79s** (Verified event, rejection event, challenge_failed, device flow, decoding error, inference error, ffmpeg error, 401/403 no-log, pre-attempt no-log, fail-closed 500, correlation sanitization, data hygiene, replay protection) |
