@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -12,6 +12,8 @@ import {
 } from './authUtils.ts';
 import { DEMO_SESSION_KEY } from './authContextDef.ts';
 import { googleAuthProvider, isFirebaseConfigured } from '../lib/firebase.ts';
+import { validateBundleContent } from '../lib/bundleValidator.ts';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -284,4 +286,108 @@ describe('Google Sign-In & Authentication Utilities Suite', () => {
       );
     });
   });
+
+  describe('Production Bundle Security & Empty-ApiKey Prevention Suite (validateBundleContent)', () => {
+    test('rejects bundle containing empty Firebase apiKey ("") — regression test for Increment 7A', () => {
+      const brokenBundle =
+        'var vc={apiKey:"",authDomain:"voice-lock-7c111.firebaseapp.com",projectId:"voice-lock-7c111"};';
+      const result = validateBundleContent(brokenBundle);
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('empty Firebase apiKey')));
+    });
+
+    test('rejects bundle containing empty apiKey formatted with template literals or single quotes', () => {
+      const templateLiteralBundle =
+        'var vc={apiKey:``,authDomain:`voice-lock-7c111.firebaseapp.com`,projectId:`voice-lock-7c111`};';
+      const result1 = validateBundleContent(templateLiteralBundle);
+      assert.strictEqual(result1.valid, false);
+      assert.ok(result1.errors.some((e) => e.includes('empty Firebase apiKey')));
+
+      const singleQuoteBundle =
+        "var vc={apiKey:'',authDomain:'voice-lock-7c111.firebaseapp.com',projectId:'voice-lock-7c111'};";
+      const result2 = validateBundleContent(singleQuoteBundle);
+      assert.strictEqual(result2.valid, false);
+      assert.ok(result2.errors.some((e) => e.includes('empty Firebase apiKey')));
+    });
+
+    test('rejects bundle containing placeholder Firebase configuration', () => {
+      const placeholderBundle =
+        'var vc={apiKey:"your_firebase_web_api_key_here",projectId:"voice-lock-7c111"};';
+      const result = validateBundleContent(placeholderBundle);
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.errors.some((e) => e.includes('placeholder Firebase configuration')));
+    });
+
+    test('rejects bundle containing leaked server secrets or private keys', () => {
+      const leakedKeyBundle =
+        'export const conf={apiKey:"AIzaValidKey",private_key_id:"12345"};';
+      const result1 = validateBundleContent(leakedKeyBundle);
+      assert.strictEqual(result1.valid, false);
+      assert.ok(result1.errors.some((e) => e.includes('private keys')));
+
+      const leakedServiceAccount =
+        'const creds={"type":"service_account","project_id":"voice-lock-7c111"};';
+      const result2 = validateBundleContent(leakedServiceAccount);
+      assert.strictEqual(result2.valid, false);
+      assert.ok(result2.errors.some((e) => e.includes('service account')));
+    });
+
+    test('accepts bundle containing valid client Firebase credentials', () => {
+      const validBundle =
+        'var vc={apiKey:"AIzaSyDTjTXsii9_1Be-pr0Zb3FCQbNkuaAn2Ic",authDomain:"voice-lock-7c111.firebaseapp.com",projectId:"voice-lock-7c111"};';
+      const result = validateBundleContent(validBundle);
+      assert.strictEqual(result.valid, true);
+      assert.strictEqual(result.errors.length, 0);
+    });
+
+    test('validates generated production JavaScript assets on disk pass bundle security requirements', () => {
+      const distAssetsDir = resolve(__dirname, '../../dist/assets');
+      if (!existsSync(distAssetsDir)) {
+        return; // Skip if production build has not been executed yet
+      }
+
+      const files = readdirSync(distAssetsDir).filter((f) => f.endsWith('.js'));
+      assert.ok(files.length > 0, 'Expected at least one production JavaScript bundle in dist/assets');
+
+      for (const file of files) {
+        const bundlePath = resolve(distAssetsDir, file);
+        const code = readFileSync(bundlePath, 'utf-8');
+
+        // Bundle must pass security validator
+        const result = validateBundleContent(code);
+        assert.strictEqual(
+          result.valid,
+          true,
+          `Bundle ${file} failed validation: ${result.errors.join('; ')}`
+        );
+
+        // Bundle must contain production project ID and production API URL
+        assert.ok(
+          code.includes('voice-lock-7c111'),
+          `Bundle ${file} missing production Firebase project ID voice-lock-7c111`
+        );
+        assert.ok(
+          code.includes('https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io'),
+          `Bundle ${file} missing production API base URL`
+        );
+
+        // Verify non-empty inlined apiKey
+        const emptyKeyMatch = code.match(/apiKey:\s*["'`]{2}/);
+        assert.strictEqual(
+          emptyKeyMatch,
+          null,
+          `Bundle ${file} contains empty apiKey regression!`
+        );
+      }
+    });
+
+    test('verifies vite.config.ts enforces build-time validation and bundle assertion plugin', () => {
+      const viteConfigFile = readFileSync(resolve(__dirname, '../../vite.config.ts'), 'utf-8');
+      assert.ok(viteConfigFile.includes('VITE_FIREBASE_API_KEY'));
+      assert.ok(viteConfigFile.includes('VITE_API_BASE_URL'));
+      assert.ok(viteConfigFile.includes('firebaseBundleValidatorPlugin'));
+      assert.ok(viteConfigFile.includes('emptyApiKeyPattern'));
+    });
+  });
 });
+

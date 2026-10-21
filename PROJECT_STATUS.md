@@ -1,9 +1,10 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 21, 2026  
-**Current Milestone:** Increment 5C — Real Backend-Driven Voice Verification UI & WebM Audio Decoding (Completed)  
+**Current Milestone:** Increment 7B — Fix Firebase Production Build Configuration & Bundle Integrity Assertion (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 96 frontend tests and 304 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 103 frontend tests and 304 backend tests passing; 0 lint errors; clean production build with verified inlined Firebase client config; zero secret leakage; clean working tree)
+
 
 ---
 
@@ -924,14 +925,27 @@ Increment 5C replaces the prototype verification simulator in `frontend/src/comp
   - Added 12 comprehensive unit and integration tests in `frontend/src/components/pages/VerificationPage.test.ts` covering challenge display, real recording upload, genuine unlock, liveness denial, impostor denial, unmapped user 403, expired challenges, empty audio, HTTP errors, network failures, and zero-mock AST invariants.
   - All 96 frontend tests and 304 backend tests pass with 0 linter warnings and clean production build.
 
+### Increment 7B: Firebase Production Build Configuration & Bundle Integrity Assertion (Completed)
+- **Root Cause Resolution for Deployed Auth Failures:**
+  - Diagnosed Increment 7A production failure where `apiKey: ""` was compiled into the deployed bundle due to multiline shell parsing issues, disabling Firebase SDK and causing synthetic mock token transmission that the backend rejected with HTTP 401.
+  - Implemented robust, native environment loading using Vite's built-in `loadEnv` reading from `.env.production.local` and `.env.local` without multiline shell scraping.
+- **Fail-Fast Build Validation:**
+  - Added pre-flight configuration validation in `frontend/vite.config.ts`: production builds fail fast with descriptive errors if `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_AUTH_DOMAIN`, or `VITE_API_BASE_URL` are missing, empty, or placeholder strings.
+  - Added `firebaseBundleValidatorPlugin` in `frontend/vite.config.ts` hooking into `generateBundle`: scans emitted JavaScript chunks and fails the build if any bundle contains an empty `apiKey: ""` or placeholder keys.
+- **Bundle Security Assertions & Regression Testing:**
+  - Created typed assertion helper `validateBundleContent` in `frontend/src/lib/bundleValidator.ts` detecting empty API keys, placeholder configurations, and server secret leaks (`private_key_id`, service-account credentials).
+  - Added 7 automated unit and regression tests in `frontend/src/context/authUtils.test.ts` verifying empty API key rejection, template literal/quote variations, secret leak detection, and live validation of generated `dist/assets/index-*.js` files on disk.
+  - Fixed test idempotency in `tests/test_metrics_api.py` by guaranteeing cleanup of test fixtures in a `finally` block.
+  - All 103 frontend tests pass cleanly (446ms), 0 linter warnings in oxlint across 32 files, and clean Vite production build in ~100ms with verified inlined Firebase client config.
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **96/96 tests PASSED in 401ms** (VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 31 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 100ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js`) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **103/103 tests PASSED in 446ms** (Bundle security & empty apiKey prevention, inlined client config validation, VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 32 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 99ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js` with verified non-empty Firebase client config) |
 | **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **304/304 tests PASSED in 15.19s** (36 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 20 Speaker Repo + 10 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database + WebM upload support) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |

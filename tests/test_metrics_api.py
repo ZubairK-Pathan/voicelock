@@ -293,55 +293,65 @@ def test_metrics_data_minimization_guarantee():
     Zero event IDs, user IDs, speaker IDs, device IDs, request IDs,
     individual timestamps, audio paths, embeddings, or scores.
     """
-    with get_db_context() as session:
-        # Pre-seed referenced speaker and device
-        speaker = SpeakerRecord(speaker_id="SensitiveSpeaker123", full_name="Sensitive Speaker")
-        device = DeviceRecord(device_id="vault-terminal-secret", name="Vault", secret_hash="secret_hash_value")
-        session.add_all([speaker, device])
-        session.flush()
+    try:
+        with get_db_context() as session:
+            # Pre-seed referenced speaker and device
+            speaker = SpeakerRecord(speaker_id="SensitiveSpeaker123", full_name="Sensitive Speaker")
+            device = DeviceRecord(device_id="vault-terminal-secret", name="Vault", secret_hash="secret_hash_value")
+            session.add_all([speaker, device])
+            session.flush()
 
-        repo = VerificationEventRepository(session)
-        repo.create_event(
-            outcome=VerificationOutcome.VERIFIED,
-            verification_flow="device",
-            user_id="sensitive_user_uid_999",
-            speaker_id="SensitiveSpeaker123",
-            device_id="vault-terminal-secret",
-            request_id="req_confidential_uuid_xyz",
-        )
+            repo = VerificationEventRepository(session)
+            repo.create_event(
+                outcome=VerificationOutcome.VERIFIED,
+                verification_flow="device",
+                user_id="sensitive_user_uid_999",
+                speaker_id="SensitiveSpeaker123",
+                device_id="vault-terminal-secret",
+                request_id="req_confidential_uuid_xyz",
+            )
 
-    response = client.get("/metrics/verification", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
-    assert response.status_code == 200
-    raw_text = response.text
+        response = client.get("/metrics/verification", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
+        assert response.status_code == 200
+        raw_text = response.text
 
-    # Verify sensitive identity and correlation strings are absent
-    assert "SensitiveSpeaker123" not in raw_text
-    assert "Sensitive Speaker" not in raw_text
-    assert "vault-terminal-secret" not in raw_text
-    assert "secret_hash_value" not in raw_text
-    assert "sensitive_user_uid_999" not in raw_text
-    assert "req_confidential_uuid_xyz" not in raw_text
+        # Verify sensitive identity and correlation strings are absent
+        assert "SensitiveSpeaker123" not in raw_text
+        assert "Sensitive Speaker" not in raw_text
+        assert "vault-terminal-secret" not in raw_text
+        assert "secret_hash_value" not in raw_text
+        assert "sensitive_user_uid_999" not in raw_text
+        assert "req_confidential_uuid_xyz" not in raw_text
 
-    # Verify no raw biometric metadata or database internal fields are exposed
-    assert "embedding" not in raw_text.lower()
-    assert "similarity" not in raw_text.lower()
-    assert "score" not in raw_text.lower()
-    assert "audio" not in raw_text.lower()
+        # Verify no raw biometric metadata or database internal fields are exposed
+        assert "embedding" not in raw_text.lower()
+        assert "similarity" not in raw_text.lower()
+        assert "score" not in raw_text.lower()
+        assert "audio" not in raw_text.lower()
 
-    # Verify exact schema keys
-    data = response.json()
-    expected_keys = {
-        "total",
-        "verified",
-        "rejected",
-        "challenge_failed",
-        "error",
-        "success_rate",
-        "start_time",
-        "end_time",
-        "verification_flow",
-    }
-    assert set(data.keys()) == expected_keys
+        # Verify exact schema keys
+        data = response.json()
+        expected_keys = {
+            "total",
+            "verified",
+            "rejected",
+            "challenge_failed",
+            "error",
+            "success_rate",
+            "start_time",
+            "end_time",
+            "verification_flow",
+        }
+        assert set(data.keys()) == expected_keys
+    finally:
+        with get_db_context() as session:
+            session.query(VerificationEvent).filter(
+                (VerificationEvent.speaker_id == "SensitiveSpeaker123") |
+                (VerificationEvent.device_id == "vault-terminal-secret")
+            ).delete(synchronize_session=False)
+            session.query(DeviceRecord).filter(DeviceRecord.device_id == "vault-terminal-secret").delete(synchronize_session=False)
+            session.query(SpeakerRecord).filter(SpeakerRecord.speaker_id == "SensitiveSpeaker123").delete(synchronize_session=False)
+            session.commit()
 
 
 # ---------------------------------------------------------------------------
