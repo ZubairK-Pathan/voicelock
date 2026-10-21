@@ -9,6 +9,22 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Increment 7D: Fix Verification UI State Fallthrough & Intermittent Vosk Liveness Digit Recognition**
+  - **Frontend UI State Fallthrough Fix (`VerificationPage.tsx`):**
+    - Diagnosed and resolved the root cause of the blank Step 2 panel during and after verification submissions: when `handleSubmitVerification` burned local challenge tokens (`setChallenge(null)`), Step 2's ternary fell through to `: null` for `submitting`, `result`, and `error` states.
+    - Added dedicated UI cards for `submitting` (displaying progress indicator with STT and acoustic inference context) and `result` (rendering consumed challenge digits with "Request Fresh Challenge" CTA and confirmation that the token was burned to prevent replay attacks).
+    - Preserved `consumedChallenge` state across submission and outcome rendering so operators can review the evaluated challenge sequence.
+    - Replaced unhandled fallthrough with a fallback inactive state, ensuring Step 2 never renders a blank void in any lifecycle state.
+    - Updated `VerificationPage.test.ts` to assert that submitting, consumed, and review states are explicitly handled.
+  - **Backend Vosk STT Homophone & Digit Parsing Fix (`liveness.py`):**
+    - Diagnosed intermittent liveness failure ("Challenge failed: spoken digits did not match the required challenge sequence"): Vosk STT unconstrained open-domain language models frequently transcribe spoken numbers as English phonetic homophones ("to" / "too" for 2, "for" / "fore" for 4, "won" for 1, "ate" for 8, "o" / "oh" for 0).
+    - Expanded `DIGIT_WORDS` and `WORD_TO_DIGIT` dictionaries to map common homophones to numeric digits.
+    - Updated `verify_liveness` to parse multi-digit numeric strings (e.g. "148") character-by-character rather than dropping them when they exceed single digits.
+    - Constrained Vosk's `KaldiRecognizer` with a dynamic digit-token grammar JSON list, reducing acoustic decoder search space and eliminating out-of-domain word hallucinations while maintaining graceful fallback.
+    - Added comprehensive unit test suite in `tests/test_liveness_unit.py` (8 tests passing) covering homophone resolution, multi-digit string parsing, mixed words, silence/empty fail-closed handling, anti-spoofing rejection of incorrect sequences, and `InMemoryChallengeStore` burn-on-use lifecycle.
+  - **Verification Quality Gates:** 312 backend tests and 103 frontend tests passing with 0 lint warnings, clean bundle compilation, and 100% ML accuracy on evaluation benchmarks.
+
 ### Added
 - **Increment 4F: Environment Variable Credential Fallback for Serverless Container Deployment**
   - Updated `app/core/auth.py` and `app/core/config.py` to support `FIREBASE_CREDENTIALS_JSON` environment variable as a fallback when `FIREBASE_CREDENTIALS_PATH` does not point to a valid file on disk.

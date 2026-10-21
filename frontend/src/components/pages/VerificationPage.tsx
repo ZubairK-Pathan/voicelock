@@ -49,6 +49,7 @@ export const VerificationPage: React.FC = () => {
 
   // Active server challenge
   const [challenge, setChallenge] = useState<ChallengeApiResponse | null>(null);
+  const [consumedChallenge, setConsumedChallenge] = useState<ChallengeApiResponse | null>(null);
   const [challengeTtl, setChallengeTtl] = useState<number>(60);
 
   // Backend verification result or error
@@ -129,6 +130,7 @@ export const VerificationPage: React.FC = () => {
     setErrorMessage(null);
     setErrorStatus(null);
     setVerificationResult(null);
+    setConsumedChallenge(null);
     recorder.clearRecording();
 
     const sessionId = generateSessionId();
@@ -188,6 +190,8 @@ export const VerificationPage: React.FC = () => {
     const activeSessionId = challenge.session_id;
 
     // Single-attempt invalidation: Burn local challenge state immediately upon submission
+    // Preserve evaluated challenge reference for display during verification and review
+    setConsumedChallenge(challenge);
     setChallenge(null);
     setPageState('submitting');
     setErrorMessage(null);
@@ -227,6 +231,7 @@ export const VerificationPage: React.FC = () => {
   const handleReset = useCallback(() => {
     setPageState('idle');
     setChallenge(null);
+    setConsumedChallenge(null);
     setVerificationResult(null);
     setErrorMessage(null);
     setErrorStatus(null);
@@ -486,6 +491,80 @@ export const VerificationPage: React.FC = () => {
                 Request Fresh Challenge
               </button>
             </div>
+          ) : pageState === 'submitting' ? (
+            <div
+              data-testid="challenge-submitting-card"
+              style={{
+                flex: 1,
+                minHeight: '220px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '14px',
+                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(14, 20, 34, 0.7) 100%)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                padding: '24px',
+                textAlign: 'center',
+              }}
+            >
+              <RefreshCw size={36} className="animate-spin" color="#60A5FA" />
+              <div className="text-sm font-semibold text-primary">Verifying Biometric Audio...</div>
+              <p className="text-xs text-secondary" style={{ maxWidth: '320px', lineHeight: '1.5' }}>
+                Server is performing offline Vosk STT speech transcription to verify spoken challenge digits and evaluating SpeechBrain ECAPA-TDNN acoustic embeddings.
+              </p>
+            </div>
+          ) : pageState === 'result' ? (
+            <div
+              data-testid="challenge-consumed-card"
+              style={{
+                flex: 1,
+                minHeight: '220px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                background: 'rgba(14, 20, 34, 0.5)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                padding: '24px',
+                textAlign: 'center',
+              }}
+            >
+              {consumedChallenge ? (
+                <>
+                  <div className="text-xs text-muted font-mono" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    Evaluated Challenge Sequence (Consumed)
+                  </div>
+                  <div
+                    data-testid="consumed-challenge-digits"
+                    className="font-mono text-3xl font-bold"
+                    style={{
+                      color: '#94A3B8',
+                      letterSpacing: '0.35em',
+                      marginTop: '4px',
+                    }}
+                  >
+                    {consumedChallenge.display || consumedChallenge.digits.join('   ')}
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm font-semibold text-primary">Challenge Consumed</div>
+              )}
+              <p className="text-xs text-secondary" style={{ maxWidth: '320px', lineHeight: '1.5', marginTop: '4px' }}>
+                Single-attempt liveness challenge has been evaluated by the server and burned to prevent replay attacks. Review the detailed biometric verification result below.
+              </p>
+              <button
+                data-testid="request-fresh-challenge-btn"
+                onClick={handleRequestChallenge}
+                className="btn btn-primary"
+                style={{ fontSize: '12px', padding: '8px 18px', marginTop: '6px' }}
+              >
+                <Radio size={14} /> Request Fresh Challenge
+              </button>
+            </div>
           ) : challenge ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {/* Server-Issued Challenge Display */}
@@ -606,19 +685,11 @@ export const VerificationPage: React.FC = () => {
                       <button
                         data-testid="submit-verify-btn"
                         onClick={handleSubmitVerification}
-                        disabled={challengeTtl <= 0 || pageState === 'submitting'}
+                        disabled={challengeTtl <= 0}
                         className="btn btn-primary"
                         style={{ flex: 2, fontSize: '12px', padding: '8px' }}
                       >
-                        {pageState === 'submitting' ? (
-                          <>
-                            <RefreshCw size={14} className="animate-spin" /> Verifying...
-                          </>
-                        ) : (
-                          <>
-                            <Play size={14} /> Submit for Verification
-                          </>
-                        )}
+                        <Play size={14} /> Submit for Verification
                       </button>
                     </div>
                   </div>
@@ -658,7 +729,30 @@ export const VerificationPage: React.FC = () => {
                 )}
               </div>
             </div>
-          ) : null}
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                minHeight: '220px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+                background: 'rgba(14, 20, 34, 0.4)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--border-subtle)',
+                padding: '24px',
+                textAlign: 'center',
+              }}
+            >
+              <MicOff size={36} color="var(--text-muted)" />
+              <div className="text-sm font-semibold text-primary">Challenge Not Active</div>
+              <p className="text-xs text-muted" style={{ maxWidth: '280px' }}>
+                Click "Request Liveness Challenge" to obtain an unpredictable, cryptographically generated 3-digit sequence from the backend.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

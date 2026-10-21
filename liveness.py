@@ -35,15 +35,15 @@ from pathlib import Path
 from typing import Callable, Optional
 
 DIGIT_WORDS = {
-    "0": ["zero", "oh"],
-    "1": ["one"],
-    "2": ["two"],
+    "0": ["zero", "oh", "o"],
+    "1": ["one", "won"],
+    "2": ["two", "to", "too"],
     "3": ["three"],
-    "4": ["four"],
+    "4": ["four", "for", "fore"],
     "5": ["five"],
     "6": ["six"],
     "7": ["seven"],
-    "8": ["eight"],
+    "8": ["eight", "ate"],
     "9": ["nine"],
 }
 
@@ -363,7 +363,11 @@ def transcribe_audio(audio_path: str) -> Optional[str]:
             return None
 
         model = _get_model()
-        rec = KaldiRecognizer(model, 16000)
+        grammar = json.dumps(list(WORD_TO_DIGIT.keys()) + [str(i) for i in range(10)] + ["[unk]"])
+        try:
+            rec = KaldiRecognizer(model, 16000, grammar)
+        except Exception:
+            rec = KaldiRecognizer(model, 16000)
         rec.SetWords(True)
 
         transcript_parts = []
@@ -423,8 +427,10 @@ def verify_liveness(transcript: Optional[str], challenge: list[str]) -> tuple[bo
         clean = word.strip(".,!?")
         if clean in WORD_TO_DIGIT:
             spoken_digits.append(WORD_TO_DIGIT[clean])
-        elif clean.isdigit() and clean in DIGIT_WORDS:
-            spoken_digits.append(clean)
+        elif clean.isdigit():
+            for d in clean:
+                if d in DIGIT_WORDS:
+                    spoken_digits.append(d)
 
     expected = challenge
     if spoken_digits == expected:

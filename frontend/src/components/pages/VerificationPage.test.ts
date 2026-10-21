@@ -473,5 +473,20 @@ describe('Increment 3: Real Backend-Driven Voice Verification Suite', () => {
       source.includes('unmapped-identity-alert') || source.includes('Unmapped Voice Identity'),
       'VerificationPage must render a dedicated unmapped identity security alert'
     );
+
+    // Asserts Step 2 challenge panel explicitly handles submitting and consumed/result states
+    assert.ok(
+      source.includes('challenge-submitting-card'),
+      'VerificationPage must render a dedicated submitting state in Step 2 panel'
+    );
+    assert.ok(
+      source.includes('challenge-consumed-card'),
+      'VerificationPage must render a dedicated consumed challenge state in Step 2 panel'
+    );
+    assert.ok(
+      source.includes('consumedChallenge'),
+      'VerificationPage must preserve consumed challenge reference for review'
+    );
   });
 });
+
