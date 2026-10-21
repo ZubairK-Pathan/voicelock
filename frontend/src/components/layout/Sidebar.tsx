@@ -8,8 +8,10 @@ import {
   Shield,
   Activity,
   Sliders,
+  UserCheck,
 } from 'lucide-react';
 import type { NavigationTab } from '../../types';
+import { useAuth } from '../../context/useAuth';
 
 interface SidebarProps {
   activeTab: NavigationTab;
@@ -18,6 +20,7 @@ interface SidebarProps {
     speakers?: number;
     devices?: number;
     alerts?: number;
+    mappings?: number;
   };
 }
 
@@ -26,6 +29,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onTabChange,
   counts,
 }) => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
   const navItems = [
     {
       id: 'overview' as NavigationTab,
@@ -38,6 +44,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: <Users size={18} />,
       badge: counts.speakers,
     },
+    ...(isAdmin
+      ? [
+          {
+            id: 'identities' as NavigationTab,
+            label: 'Identity Mappings',
+            icon: <UserCheck size={18} />,
+            badge: counts.mappings,
+          },
+        ]
+      : []),
     {
       id: 'verification' as NavigationTab,
       label: 'Voice Verification',

@@ -14,6 +14,10 @@ import type {
   ChallengeApiResponse,
   VerifyRequest,
   VerifyApiResponse,
+  CreateMappingRequest,
+  MappingsListResponse,
+  UnmappedSpeakersResponse,
+  MappingOperationResponse,
 } from '../types';
 
 export interface ApiClientConfig {
@@ -284,6 +288,59 @@ export class ApiClient {
     options?: RequestInit & { requiresAuth?: boolean }
   ): Promise<ApiResponse<VerifyApiResponse>> {
     return this.verify(payload, options);
+  }
+
+  /**
+   * Dispatches a typed DELETE request.
+   */
+  public delete<T = unknown>(
+    endpoint: string,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<T>> {
+    return this.request<T>(endpoint, { ...options, method: 'DELETE' });
+  }
+
+  /**
+   * Fetch all active user-to-speaker mappings.
+   * Requires verified administrator session (RBAC).
+   */
+  public getAdminMappings(
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<MappingsListResponse>> {
+    return this.get<MappingsListResponse>('/admin/mappings', options);
+  }
+
+  /**
+   * Fetch eligible unmapped active speakers for association.
+   * Requires verified administrator session (RBAC).
+   */
+  public getUnmappedSpeakers(
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<UnmappedSpeakersResponse>> {
+    return this.get<UnmappedSpeakersResponse>('/admin/mappings/unmapped-speakers', options);
+  }
+
+  /**
+   * Link an authenticated Firebase user UID to an enrolled speaker identity.
+   * Requires verified administrator session (RBAC).
+   */
+  public createAdminMapping(
+    payload: CreateMappingRequest,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<MappingOperationResponse>> {
+    return this.post<MappingOperationResponse>('/admin/mappings', payload, options);
+  }
+
+  /**
+   * Unlink a user-to-speaker mapping by its primary key identifier.
+   * Note: Deletes only the mapping record. Preserves speaker voiceprint embeddings and audio.
+   * Requires verified administrator session (RBAC).
+   */
+  public deleteAdminMapping(
+    mappingId: number,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<MappingOperationResponse>> {
+    return this.delete<MappingOperationResponse>(`/admin/mappings/${mappingId}`, options);
   }
 }
 

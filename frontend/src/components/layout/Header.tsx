@@ -32,6 +32,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
       title: 'Security Audit Log',
       subtitle: 'Comprehensive audit stream: liveness checks, replay alerts, and auth decisions',
     },
+    identities: {
+      title: 'Identity Management',
+      subtitle: 'Administrator control: link Firebase accounts to enrolled voice identities',
+    },
   };
 
   const { title, subtitle } = titles[activeTab];

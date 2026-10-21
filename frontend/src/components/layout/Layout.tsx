@@ -10,6 +10,7 @@ interface LayoutProps {
     speakers?: number;
     devices?: number;
     alerts?: number;
+    mappings?: number;
   };
   children: React.ReactNode;
 }

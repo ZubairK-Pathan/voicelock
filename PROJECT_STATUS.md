@@ -1,9 +1,9 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 22, 2026  
-**Current Milestone:** Increment 2A — Administrator User-to-Speaker Identity Mapping API (Completed)  
+**Current Milestone:** Increment 2B — Administrator Identity Management UI (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; healthy at `https://voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io/`; `ADMIN_EMAILS` configured for `pzubair580@gmail.com`; 103 frontend tests and 330 backend tests passing; 0 lint errors; clean production build with verified inlined Firebase client config; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; 119 frontend tests and 330 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 
 ---
@@ -952,16 +952,33 @@ Increment 5C replaces the prototype verification simulator in `frontend/src/comp
   - Added `SpeakerRepository.get_unmapped_active_speakers`.
 - **Targeted Test Coverage (`tests/test_admin_mappings_api.py`):**
   - Added 16 comprehensive unit and integration tests covering happy paths, 401/403 authorization guards, 409 duplicate conflicts, 404 missing speakers/mappings, 400 inactive speakers, embedding preservation on unlink, atomic audit rollback, and response data minimization.
-  - Added unit tests in `tests/test_user_speaker_repository.py` and `tests/test_speaker_repository.py` expanding full suite to 330 passing tests.
+### Increment 2B: Administrator Identity Management UI (Completed)
+- **API Client Extensions (`frontend/src/lib/apiClient.ts`):**
+  - Added typed methods `getAdminMappings`, `getUnmappedSpeakers`, `createAdminMapping`, and `deleteAdminMapping`.
+  - Added generic `delete<T>` method to `ApiClient` using existing Bearer token acquisition mechanism.
+  - Strictly preserves data safety: zero client-supplied role flags, zero `isAdmin` parameters, and zero token leakage.
+- **Frontend Identity Management Panel (`frontend/src/components/pages/IdentityManagementPage.tsx`):**
+  - Built comprehensive administrative panel with live mappings table, search/filter bar, and count badges.
+  - Implemented "Link Account" modal with Firebase UID input, eligible unmapped active speaker dropdown, optional administrative notes, and validation.
+  - Implemented explicit "Unlink" confirmation modal with clear data safety notice guaranteeing that underlying speaker profiles, 192-d ECAPA-TDNN embeddings, and training audio are never deleted or modified.
+  - Handled loading, empty, success, and error states (HTTP 409 duplicate conflicts, HTTP 403 forbidden, HTTP 401 expired sessions, and network failures).
+- **Navigation & Role Guard (`App.tsx`, `Sidebar.tsx`, `Header.tsx`, `Layout.tsx`, `types/index.ts`):**
+  - Added `'identities'` tab to `NavigationTab` type and Header titles.
+  - Added "Identity Mappings" nav item to `Sidebar.tsx` rendered conditionally for authenticated administrators only.
+  - Enforced presentation role check in `IdentityManagementPage.tsx` displaying an access-restricted state to non-admin operators while deferring authoritative authorization to backend RBAC.
+  - Wired live mappings count telemetry in `App.tsx` for admin operators.
+- **Targeted Test Coverage (`frontend/src/lib/identityMapping.test.ts`):**
+  - Added 16 automated tests covering API client methods, 401/403/404/409 error handling, empty states, admin role guards, biometric data safety guarantees, and schema data minimization.
+  - Full frontend suite expanded from 103 to 119 passing tests.
 
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **103/103 tests PASSED in 446ms** (Bundle security & empty apiKey prevention, inlined client config validation, VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
-| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 32 files |
-| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 99ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js` with verified non-empty Firebase client config) |
+| **Frontend Unit & Integration Suite** | `npm test` (in `frontend/`) | 0 | **119/119 tests PASSED in 490ms** (16 Identity Management UI tests + Bundle security & empty apiKey prevention, inlined client config validation, VerificationPage real UI flow, unmapped identity 403 fail-closed, audio recording upload, genuine unlock, liveness denial, impostor denial, expired challenge, zero-mock invariant, audio recorder lifecycle, track cleanup, MIME negotiation, duration limits, 0-byte rejection, challenge generation, multipart verification, boundary preservation, Bearer headers, Google sign-in role resolution, popup error translation, session persistence, token acquisition, security invariant, Firebase config inlining, demo-mode detection, metrics, search filtering) |
+| **Frontend Code Quality** | `npm run lint` (in `frontend/`) | 0 | **0 warnings, 0 errors** across 34 files |
+| **Frontend Production Build** | `npm run build` (in `frontend/`) | 0 | **Build passed in 106ms** (`dist/index.html`, `dist/assets/index-*.css`, `dist/assets/index-*.js` with verified non-empty Firebase client config) |
 | **Full Backend Test Suite** | `.venv/bin/pytest -v` | 0 | **330/330 tests PASSED in 16.58s** (16 Admin Mappings API + 8 Liveness Unit + 36 API + 22 Auth + 7 Policy + 30 Device Auth + 12 DB Device Auth + 27 Database + 12 Device Repo + 8 Devices API + 21 Speaker Repo + 11 User Speaker Repo + 9 Persistent Auth + 17 Embeddings + 17 Seeder + 18 DB Speaker Service + 13 Event Repo + 15 Route Audit + 14 Metrics API + 4 Containerization + 6 Neon Database + WebM upload support) |
 | **Admin Mappings API Suite** | `.venv/bin/pytest tests/test_admin_mappings_api.py -v` | 0 | **16/16 tests PASSED in 1.20s** (List mappings, unmapped speakers, link success, audit trail, 401/403 guards, 409 duplicate UID/speaker conflicts, 400 inactive speaker, 404 missing speaker/mapping, embedding preservation on unlink, atomic audit rollback, data minimization) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |

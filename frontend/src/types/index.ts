@@ -1,6 +1,49 @@
-export type NavigationTab = 'overview' | 'speakers' | 'verification' | 'devices' | 'events';
+export type NavigationTab = 'overview' | 'speakers' | 'verification' | 'devices' | 'events' | 'identities';
 
 export type EntityStatus = 'active' | 'suspended' | 'revoked';
+
+export interface CreateMappingRequest {
+  firebase_uid: string;
+  speaker_id: string;
+  notes?: string;
+  metadata_json?: string;
+}
+
+export interface UserSpeakerMappingItem {
+  id: number;
+  firebase_uid: string;
+  speaker_id: string;
+  assigned_by: string | null;
+  created_at: string;
+  updated_at: string;
+  speaker_name: string | null;
+  speaker_status: EntityStatus | string | null;
+  sample_count: number | null;
+}
+
+export interface MappingsListResponse {
+  mappings: UserSpeakerMappingItem[];
+  count: number;
+}
+
+export interface UnmappedSpeakerItem {
+  speaker_id: string;
+  full_name: string | null;
+  status: EntityStatus | string;
+  sample_count: number;
+  created_at: string;
+}
+
+export interface UnmappedSpeakersResponse {
+  unmapped_speakers: UnmappedSpeakerItem[];
+  count: number;
+}
+
+export interface MappingOperationResponse {
+  success: boolean;
+  message: string;
+  mapping?: UserSpeakerMappingItem | null;
+}
 
 export interface SpeakersApiResponse {
   registered_speakers: string[];

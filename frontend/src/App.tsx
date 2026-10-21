@@ -9,6 +9,7 @@ import { SpeakersPage } from './components/pages/SpeakersPage';
 import { VerificationPage } from './components/pages/VerificationPage';
 import { DevicesPage } from './components/pages/DevicesPage';
 import { SecurityEventsPage } from './components/pages/SecurityEventsPage';
+import { IdentityManagementPage } from './components/pages/IdentityManagementPage';
 import type { NavigationTab } from './types';
 import { apiClient } from './lib/apiClient';
 
@@ -19,6 +20,7 @@ function DashboardApp() {
     speakers?: number;
     devices?: number;
     alerts?: number;
+    mappings?: number;
   }>({});
 
   // Bind token provider to ApiClient so authenticated requests attach Bearer tokens
@@ -33,14 +35,19 @@ function DashboardApp() {
 
     async function loadTelemetryCounts() {
       try {
-        const [speakersRes, devicesRes] = await Promise.all([
+        const isUserAdmin = user?.role === 'admin';
+        const [speakersRes, devicesRes, mappingsRes] = await Promise.all([
           apiClient.getSpeakers(),
           apiClient.getDevices(),
+          isUserAdmin
+            ? apiClient.getAdminMappings()
+            : Promise.resolve({ ok: false, data: null, status: 0 }),
         ]);
         if (ignore) return;
         setCounts({
           speakers: speakersRes.ok && speakersRes.data ? speakersRes.data.count : undefined,
           devices: devicesRes.ok && devicesRes.data ? devicesRes.data.total : undefined,
+          mappings: mappingsRes.ok && mappingsRes.data ? mappingsRes.data.count : undefined,
           alerts: undefined,
         });
       } catch {
@@ -114,6 +121,8 @@ function DashboardApp() {
         return <DevicesPage />;
       case 'events':
         return <SecurityEventsPage />;
+      case 'identities':
+        return <IdentityManagementPage />;
       default:
         return <OverviewPage onNavigate={(tab) => setActiveTab(tab)} />;
     }
