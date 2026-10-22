@@ -506,3 +506,250 @@ describe('ApiClient Challenge & Biometric Verification Methods Suite', () => {
   });
 });
 
+describe('Increment 3A: Authentication Reliability & Token Recovery Suite', () => {
+  test('recovers from 401 on GET request by acquiring fresh token and retrying once', async () => {
+    let callCount = 0;
+    const capturedAuthHeaders: string[] = [];
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async (_url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedAuthHeaders.push(headers.get('Authorization') || '');
+
+      if (callCount === 1) {
+        return new Response(JSON.stringify({ detail: 'Firebase ID token has expired.' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ count: 10, speakers: ['Zubair'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    let refreshCount = 0;
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async (forceRefresh) => {
+        if (forceRefresh) {
+          refreshCount++;
+          return 'fresh_refreshed_token_xyz';
+        }
+        return 'initial_stale_token_abc';
+      },
+    });
+
+    try {
+      const res = await client.get<{ count: number; speakers: string[] }>('/speakers');
+      assert.strictEqual(res.ok, true);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.data?.count, 10);
+      assert.strictEqual(callCount, 2, 'Must retry exactly once');
+      assert.strictEqual(refreshCount, 1, 'Must invoke forceRefresh token acquisition');
+      assert.strictEqual(capturedAuthHeaders[0], 'Bearer initial_stale_token_abc');
+      assert.strictEqual(capturedAuthHeaders[1], 'Bearer fresh_refreshed_token_xyz');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('stops after single 401 retry without infinite loop when token refresh fails', async () => {
+    let callCount = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () => {
+      callCount++;
+      return new Response(JSON.stringify({ detail: 'Token permanently revoked.' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async (forceRefresh) => {
+        return forceRefresh ? 'fresh_token_attempt' : 'first_token';
+      },
+    });
+
+    try {
+      const res = await client.get('/speakers');
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 401);
+      assert.strictEqual(callCount, 2, 'Must stop at exactly 1 retry (2 calls total)');
+      assert.match(res.error || '', /Unauthorized/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('does not retry 401 on mutating operations (POST or DELETE)', async () => {
+    let callCount = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () => {
+      callCount++;
+      return new Response(JSON.stringify({ detail: 'Unauthorized mutation' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => 'test_token',
+    });
+
+    try {
+      // POST mutation
+      callCount = 0;
+      const postRes = await client.post('/admin/mappings', { firebase_uid: 'u1', speaker_id: 1 });
+      assert.strictEqual(postRes.status, 401);
+      assert.strictEqual(callCount, 1, 'POST mutations must not be blindly retried on 401');
+
+      // DELETE mutation
+      callCount = 0;
+      const deleteRes = await client.delete('/admin/mappings/1');
+      assert.strictEqual(deleteRes.status, 401);
+      assert.strictEqual(callCount, 1, 'DELETE mutations must not be blindly retried on 401');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('does not treat 403 Forbidden as an expired token (no retry on 403)', async () => {
+    let callCount = 0;
+    let forceRefreshCalled = false;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () => {
+      callCount++;
+      return new Response(JSON.stringify({ detail: 'Forbidden: Admin role required' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async (forceRefresh) => {
+        if (forceRefresh) forceRefreshCalled = true;
+        return 'valid_user_token';
+      },
+    });
+
+    try {
+      const res = await client.get('/admin/mappings');
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 403);
+      assert.strictEqual(callCount, 1, '403 Forbidden must never trigger retries');
+      assert.strictEqual(forceRefreshCalled, false, '403 must not trigger token refresh');
+      assert.match(res.error || '', /Forbidden/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('concurrent GET requests hitting 401 deduplicate token refresh calls', async () => {
+    let fetchCalls = 0;
+    let refreshCalls = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async () => {
+      fetchCalls++;
+      // On initial attempt (first 3 requests), return 401
+      if (fetchCalls <= 3) {
+        return new Response(JSON.stringify({ detail: 'Token expired' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async (forceRefresh) => {
+        if (forceRefresh) {
+          refreshCalls++;
+          // Simulate async token refresh latency
+          await new Promise((r) => setTimeout(r, 20));
+          return 'deduplicated_refreshed_token';
+        }
+        return 'stale_token';
+      },
+    });
+
+    try {
+      const [res1, res2, res3] = await Promise.all([
+        client.get('/speakers'),
+        client.get('/devices'),
+        client.get('/metrics/verification'),
+      ]);
+
+      assert.strictEqual(res1.ok, true);
+      assert.strictEqual(res2.ok, true);
+      assert.strictEqual(res3.ok, true);
+      assert.strictEqual(refreshCalls, 1, 'Token refresh must be deduplicated across concurrent requests');
+      assert.strictEqual(fetchCalls, 6, 'Each of the 3 requests retried once (3 initial + 3 retries = 6)');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('distinguishes 429 rate-limiting from authentication errors', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'Too many requests' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => 'test_token',
+    });
+
+    try {
+      const res = await client.get('/speakers');
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 429);
+      assert.match(res.error || '', /Rate limit exceeded/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('distinguishes 5xx server errors from authentication errors', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'Database connection failed' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+      getToken: async () => 'test_token',
+    });
+
+    try {
+      const res = await client.get('/speakers');
+      assert.strictEqual(res.ok, false);
+      assert.strictEqual(res.status, 503);
+      assert.notStrictEqual(res.status, 401, '503 Server Error must not be misclassified as 401 Unauthorized');
+      assert.strictEqual(res.error, 'Database connection failed');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+

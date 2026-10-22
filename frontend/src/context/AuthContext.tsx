@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import {
   signInWithEmailAndPassword,
@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { auth, googleAuthProvider, isFirebaseConfigured } from '../lib/firebase';
+import { apiClient } from '../lib/apiClient';
 import { AuthContext, DEMO_SESSION_KEY } from './authContextDef';
 import type { AppUser } from './authContextDef';
 import {
@@ -142,15 +143,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const getIdToken = async (forceRefresh: boolean = false): Promise<string | null> => {
-    if (isConfigured && firebaseUser) {
-      return await firebaseUser.getIdToken(forceRefresh);
-    }
-    if (user?.isDemoUser) {
-      return `mock_dev_token_${user.uid}_expires_${Date.now() + 3600000}`;
-    }
-    return null;
-  };
+  const getIdToken = useCallback(
+    async (forceRefresh: boolean = false): Promise<string | null> => {
+      if (isConfigured && auth) {
+        if (typeof auth.authStateReady === 'function') {
+          try {
+            await auth.authStateReady();
+          } catch {
+            // Proceed to current user evaluation
+          }
+        }
+        const currentUser = auth.currentUser || firebaseUser;
+        if (currentUser) {
+          try {
+            return await currentUser.getIdToken(forceRefresh);
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+      if (user?.isDemoUser) {
+        return `mock_dev_token_${user.uid}_expires_${Date.now() + 3600000}`;
+      }
+      return null;
+    },
+    [isConfigured, firebaseUser, user]
+  );
+
+  // Synchronously ensure apiClient always has the token provider bound
+  useEffect(() => {
+    apiClient.setTokenProvider(getIdToken);
+  }, [getIdToken]);
 
   const clearError = () => setError(null);
 

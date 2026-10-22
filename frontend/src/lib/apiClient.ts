@@ -19,10 +19,11 @@ import type {
   UnmappedSpeakersResponse,
   MappingOperationResponse,
 } from '../types';
+import { auth, isFirebaseConfigured } from './firebase.ts';
 
 export interface ApiClientConfig {
   baseUrl: string;
-  getToken?: () => Promise<string | null>;
+  getToken?: (forceRefresh?: boolean) => Promise<string | null>;
 }
 
 export interface ApiResponse<T = unknown> {
@@ -34,7 +35,8 @@ export interface ApiResponse<T = unknown> {
 
 export class ApiClient {
   private baseUrl: string;
-  private getTokenFn?: () => Promise<string | null>;
+  private getTokenFn?: (forceRefresh?: boolean) => Promise<string | null>;
+  private activeRefreshPromise: Promise<string | null> | null = null;
 
   constructor(config?: Partial<ApiClientConfig>) {
     const envBaseUrl =
@@ -50,12 +52,59 @@ export class ApiClient {
     this.getTokenFn = config?.getToken;
   }
 
-  public setTokenProvider(provider: () => Promise<string | null>): void {
+  public setTokenProvider(provider: (forceRefresh?: boolean) => Promise<string | null>): void {
     this.getTokenFn = provider;
   }
 
   public getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  /**
+   * Acquires the authentication ID token.
+   * If a custom token provider is configured, invokes it.
+   * Otherwise falls back to Firebase SDK auth instance when available.
+   */
+  public async acquireToken(forceRefresh: boolean = false): Promise<string | null> {
+    if (this.getTokenFn) {
+      try {
+        return await this.getTokenFn(forceRefresh);
+      } catch {
+        return null;
+      }
+    }
+
+    // Default fallback to Firebase SDK if initialized
+    if (isFirebaseConfigured() && auth) {
+      if (typeof auth.authStateReady === 'function') {
+        try {
+          await auth.authStateReady();
+        } catch {
+          // ignore
+        }
+      }
+      if (auth.currentUser) {
+        try {
+          return await auth.currentUser.getIdToken(forceRefresh);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Refreshes the ID token using deduplication to prevent concurrent refresh stampedes.
+   */
+  private async refreshAuthToken(): Promise<string | null> {
+    if (!this.activeRefreshPromise) {
+      this.activeRefreshPromise = this.acquireToken(true).finally(() => {
+        this.activeRefreshPromise = null;
+      });
+    }
+    return this.activeRefreshPromise;
   }
 
   /**
@@ -65,7 +114,8 @@ export class ApiClient {
   public async buildHeaders(
     customHeaders?: HeadersInit,
     requiresAuth: boolean = true,
-    isFormData: boolean = false
+    isFormData: boolean = false,
+    forcedToken?: string | null
   ): Promise<Headers> {
     const headers = new Headers(customHeaders || {});
 
@@ -76,9 +126,9 @@ export class ApiClient {
       headers.delete('Content-Type');
     }
 
-    if (requiresAuth && this.getTokenFn) {
+    if (requiresAuth) {
       try {
-        const token = await this.getTokenFn();
+        const token = forcedToken || (await this.acquireToken(false));
         if (token) {
           headers.set('Authorization', `Bearer ${token}`);
         }
@@ -95,9 +145,9 @@ export class ApiClient {
    */
   public async request<T = unknown>(
     endpoint: string,
-    options: RequestInit & { requiresAuth?: boolean } = {}
+    options: RequestInit & { requiresAuth?: boolean; _isRetry?: boolean; _refreshedToken?: string | null } = {}
   ): Promise<ApiResponse<T>> {
-    const { requiresAuth = true, ...fetchOptions } = options;
+    const { requiresAuth = true, _isRetry = false, _refreshedToken = null, ...fetchOptions } = options;
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${this.baseUrl}${cleanEndpoint}`;
 
@@ -108,7 +158,8 @@ export class ApiClient {
       const headers = await this.buildHeaders(
         fetchOptions.headers,
         requiresAuth,
-        isFormData
+        isFormData,
+        _refreshedToken
       );
 
       const response = await fetch(url, {
@@ -123,6 +174,22 @@ export class ApiClient {
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         data = (await response.json()) as T;
+      }
+
+      // Controlled 401 recovery: allow at most one token-refresh retry for safe idempotent read requests
+      if (status === 401 && requiresAuth && !_isRetry) {
+        const method = (fetchOptions.method || 'GET').toUpperCase();
+        // Safe read operations can be retried once with a refreshed token
+        if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+          const refreshedToken = await this.refreshAuthToken();
+          if (refreshedToken) {
+            return this.request<T>(endpoint, {
+              ...options,
+              _isRetry: true,
+              _refreshedToken: refreshedToken,
+            });
+          }
+        }
       }
 
       if (status === 401) {
@@ -150,6 +217,16 @@ export class ApiClient {
           error: `Forbidden${detail}`,
         };
       }
+
+      if (status === 429) {
+        return {
+          data: null,
+          status,
+          ok: false,
+          error: 'Rate limit exceeded: Too many requests. Please slow down and try again shortly.',
+        };
+      }
+
 
       if (!ok) {
         let errorDetail = `Request failed with HTTP status ${status}`;
