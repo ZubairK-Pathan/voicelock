@@ -481,7 +481,7 @@ export const VerificationPage: React.FC = () => {
               <Clock size={36} color="#EF4444" />
               <div className="text-sm font-semibold text-primary">Liveness Challenge Expired</div>
               <p className="text-xs text-secondary" style={{ maxWidth: '280px' }}>
-                Single-use challenge time-to-live (60s) has elapsed. The token has been burned to prevent replay attacks.
+                Single-use challenge time-to-live (60s) has elapsed. The token has been invalidated to mitigate replay attacks.
               </p>
               <button
                 onClick={handleRequestChallenge}
@@ -554,7 +554,7 @@ export const VerificationPage: React.FC = () => {
                 <div className="text-sm font-semibold text-primary">Challenge Consumed</div>
               )}
               <p className="text-xs text-secondary" style={{ maxWidth: '320px', lineHeight: '1.5', marginTop: '4px' }}>
-                Single-attempt liveness challenge has been evaluated by the server and burned to prevent replay attacks. Review the detailed biometric verification result below.
+                Single-attempt liveness challenge has been evaluated by the server and invalidated to mitigate replay attacks. Review the detailed biometric verification result below.
               </p>
               <button
                 data-testid="request-fresh-challenge-btn"

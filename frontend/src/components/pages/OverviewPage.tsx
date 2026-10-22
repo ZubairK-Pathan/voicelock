@@ -314,7 +314,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
                 ) : userMappingStatus === 'unmapped' ? (
                   <Badge variant="warning">UNMAPPED ACCOUNT</Badge>
                 ) : (
-                  <Badge variant="destructive">UNAVAILABLE</Badge>
+                  <Badge variant="destructive">PROBE FAILED</Badge>
                 )}
               </div>
               <CardDescription>
@@ -348,10 +348,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
                     </div>
                   </div>
                   <div className="text-xs text-muted" style={{ lineHeight: 1.5 }}>
-                    Your Firebase account UID (<span className="font-mono text-secondary">{user?.uid}</span>) is bound to this speaker voiceprint. All verification attempts are validated server-side to guarantee non-repudiation.
+                    Your Firebase account UID (<span className="font-mono text-secondary">{user?.uid}</span>) is bound to this speaker voiceprint. All verification attempts are validated server-side against this registered mapping.
                   </div>
                 </div>
-              ) : (
+              ) : userMappingStatus === 'unmapped' ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div
                     style={{
@@ -384,6 +384,31 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
                     Please provide your Firebase UID to a VoiceLock administrator. Once linked via the Identity Management panel, your voice biometric verification will be authorized automatically.
                   </p>
                 </div>
+              ) : (
+                /* userMappingStatus === 'error' */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      background: 'rgba(239, 68, 68, 0.08)',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    <div className="text-xs font-semibold" style={{ color: '#F87171', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={14} /> Biometric Enrollment Status Unavailable
+                    </div>
+                    <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.5 }}>
+                      {error || 'A network, authentication, or server error occurred while probing identity mapping. This is a connectivity or session issue, not a confirmed unmapped account.'}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div className="text-xs font-mono text-muted">Account UID: {user?.uid}</div>
+                    <Button variant="secondary" size="sm" onClick={handleRefresh}>
+                      Retry Status Check
+                    </Button>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -411,10 +436,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
                 <Mic size={22} color="#60A5FA" style={{ flexShrink: 0, marginTop: '2px' }} />
                 <div>
                   <div className="text-xs font-semibold text-primary">
-                    Stateful Anti-Spoofing Challenge-Response
+                    Spoken Liveness Challenge-Response
                   </div>
                   <p className="text-xs text-secondary" style={{ marginTop: '4px', lineHeight: 1.5 }}>
-                    When verifying, the server issues a single-use 3-digit randomized sequence with a 60-second time-to-live. Offline Vosk STT confirms spoken digits before SpeechBrain runs biometric matching.
+                    When verifying, the server issues a single-use 3-digit randomized sequence with a 60-second time-to-live. Offline Vosk STT confirms spoken digits before SpeechBrain runs biometric matching to mitigate simple replay attacks.
                   </p>
                 </div>
               </div>
@@ -433,40 +458,40 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </Card>
         </div>
 
-        {/* Security & Privacy Standards Card */}
+        {/* Security & Privacy Disclosures Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Enterprise Biometric Privacy Standards</CardTitle>
+            <CardTitle>Biometric Security & Privacy Disclosures</CardTitle>
             <CardDescription>
-              Architectural privacy protections enforced by VoiceLock Enterprise
+              Architectural implementation disclosures and privacy boundaries enforced by VoiceLock Enterprise
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
               <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
                 <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <ShieldCheck size={14} color="#10B981" /> Ephemeral Audio Processing
+                  <ShieldCheck size={14} color="#10B981" /> Temporary Audio Processing
                 </div>
                 <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                  Voice recordings captured during verification are processed in temporary memory and unlinked immediately. Audio files are never persisted to disk or database.
+                  Voice recordings submitted during verification are written to temporary server storage solely for duration of processing, evaluated by STT and acoustic inference, and unlinked upon completion. Raw audio is not stored in the database.
                 </p>
               </div>
 
               <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
                 <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <KeyRound size={14} color="#60A5FA" /> Single-Use Replay Protection
+                  <KeyRound size={14} color="#60A5FA" /> Liveness Challenge & Replay Mitigation
                 </div>
                 <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                  Challenges are atomically invalidated upon consumption (single-attempt invalidation). Pre-recorded or stolen audio cannot be reused to gain unauthorized access.
+                  Liveness protection uses a randomized spoken-digit challenge designed to mitigate simple audio replay attacks. It does not guarantee protection against sophisticated voice cloning, deepfakes, or all presentation attacks.
                 </p>
               </div>
 
               <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
                 <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Lock size={14} color="#8B5CF6" /> 1-to-1 Account Binding
+                  <Lock size={14} color="#8B5CF6" /> Server-Enforced Identity Binding
                 </div>
                 <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
-                  Strict server-side RBAC ensures you can only verify against your assigned voice identity. Parameter tampering and speaker identity impersonation are rejected with HTTP 403.
+                  Server-side role-based access control restricts non-administrative operators to their bound speaker identity. Verification requests for unmapped identities or mismatched claims are rejected with HTTP 403.
                 </p>
               </div>
             </div>

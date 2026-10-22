@@ -1,7 +1,7 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 23, 2026  
-**Current Milestone:** Increment 3C — Role-Aware Dashboard and UI Foundation (Completed)  
+**Current Milestone:** Increment 3D — Compliance Correction & Controlled Frontend Deployment (In Progress)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
 **Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; 133 frontend tests and 334 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
@@ -9,12 +9,11 @@
 ---
 
 ## 1. Executive Status
-Increment 3C establishes the enterprise role-aware user experience and UI component foundation for VoiceLock. Key achievements:
-1. **Role-Aware Navigation & Routing Protection:** Evaluated and implemented strict role partitioning across `Sidebar.tsx`, `Header.tsx`, and `App.tsx`. Standard users (`role === 'user'`) are granted access strictly to personal access functions ("Overview" and "Voice Verification"). Administrative navigation items ("Enrolled Speakers", "Identity Mappings", "Access Terminals", "Security Audit Log") are omitted from sidebar navigation. Direct navigation or tab spoofing to restricted administrative modules is intercepted by an explicit access-control boundary in `App.tsx`. Furthermore, non-admin sessions completely bypass administrative telemetry endpoints (`getSpeakers`, `getDevices`, `getAdminMappings`), eliminating 403 request storms.
-2. **Personal Regular-User Portal:** Built a dedicated, non-administrative `OverviewPage.tsx` view for regular users. It probes the user's bound speaker voiceprint status safely via `apiClient.createChallenge` without assuming UID is a speaker ID, displays mapping states ("Enrolled & Active", "Unmapped Account"), provides a clear one-click voice verification entry point, and renders enterprise biometric privacy and compliance disclosures.
-3. **Prototype Data Removal & Live Hardware Connection:** Completely purged `MOCK_DEVICES` and `MOCK_SECURITY_EVENTS`. `DevicesPage.tsx` now queries the live `apiClient.getDevices()` endpoint with search and status filtering, coupled with an informative hardware provisioning workflow modal. `SecurityEventsPage.tsx` clearly presents a transparent "Audit Stream Query API Provisioning in Progress" state referencing the underlying `security_events` database taxonomy rather than fabricated mock incidents.
-4. **Accessible UI Component Foundation:** Introduced reusable, accessible primitives in `frontend/src/components/ui/` (`Card`, `Button`, `Badge`, `Alert`) with zero-dependency class merging utility `cn()` (`src/lib/utils.ts`), supporting dark enterprise security aesthetics, ARIA roles, and consistent design tokens.
-5. **Quality & Verification:** Added 7 automated tests in `roleNavigation.test.ts` bringing total frontend tests to 133 across 19 suites (all passing). Full production bundle built cleanly in 238ms (gzipped JS 132.93 kB, CSS 2.45 kB) with 0 oxlint warnings or errors. Verified locally via automated browser subagent for both Standard User and Security Admin profiles.
+Increment 3D refines the Increment 3C enterprise role-aware user experience and UI component foundation with rigorous compliance disclosures and controlled Azure deployment:
+1. **Compliance & Security Claim Correction:** Replaced all unsubstantiated claims with precise, verifiable engineering disclosures. Specifically, liveness protection is explicitly documented as mitigating simple audio replay attacks while acknowledging it does not guarantee protection against sophisticated voice cloning, deepfakes, or all presentation attacks. Audio retention guarantees were replaced with an accurate description of temporary server spooling during STT/inference with immediate unlinking upon completion. Non-repudiation guarantees were replaced with server-enforced identity binding verification.
+2. **Distinct Probe Error Separation:** Refined `OverviewPage.tsx` so that network failures, authentication lapses (401), or backend errors during identity mapping probes are explicitly flagged as `PROBE FAILED` / `Biometric Enrollment Status Unavailable` rather than mislabeled as an unmapped user account.
+3. **Role-Aware Navigation & Routing Protection:** Preserved strict role partitioning across `Sidebar.tsx`, `Header.tsx`, and `App.tsx`. Standard users (`role === 'user'`) are granted access strictly to personal access functions ("Overview" and "Voice Verification"). Administrative navigation items ("Enrolled Speakers", "Identity Mappings", "Access Terminals", "Security Audit Log") are omitted from sidebar navigation. Direct navigation or tab spoofing to restricted administrative modules is intercepted by an explicit access-control boundary in `App.tsx`. Furthermore, non-admin sessions completely bypass administrative telemetry endpoints (`getSpeakers`, `getDevices`, `getAdminMappings`), eliminating 403 request storms.
+4. **Accessible UI Component Foundation & Zero Mock Data:** Preserved reusable, accessible primitives in `frontend/src/components/ui/` (`Card`, `Button`, `Badge`, `Alert`). Purged all mock devices and mock security events in favor of live API integration and transparent provisioning placeholders.
 
 ---
 

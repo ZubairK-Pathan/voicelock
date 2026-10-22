@@ -117,6 +117,27 @@ describe('Increment 3C: Role-Aware Navigation & UI Foundation Suite', () => {
       'OverviewPage must render explanatory unmapped state for users without a voiceprint'
     );
 
+    // Separates failed probe / network / auth errors from genuine unmapped account
+    assert.ok(
+      source.includes('PROBE FAILED') && source.includes('Biometric Enrollment Status Unavailable'),
+      'OverviewPage must distinguish failed probes from confirmed unmapped accounts'
+    );
+
+    // Accurate compliance disclosures
+    assert.ok(
+      source.includes('Liveness protection uses a randomized spoken-digit challenge designed to mitigate simple audio replay attacks') &&
+      source.includes('It does not guarantee protection against sophisticated voice cloning, deepfakes, or all presentation attacks'),
+      'OverviewPage must state accurate liveness and replay mitigation limitations'
+    );
+    assert.ok(
+      source.includes('Temporary Audio Processing') && source.includes('unlinked upon completion'),
+      'OverviewPage must accurately describe temporary audio spooling and unlinking'
+    );
+    assert.ok(
+      !source.includes('ISO/IEC') && !source.includes('guarantee non-repudiation'),
+      'OverviewPage must not claim uncertified ISO compliance or non-repudiation guarantees'
+    );
+
     // Must NOT import mock data
     assert.ok(
       !source.includes("from '../../data/mockData'") && !source.includes("from '../data/mockData'"),

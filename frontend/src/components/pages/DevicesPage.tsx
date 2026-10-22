@@ -345,7 +345,7 @@ export const DevicesPage: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13px', lineHeight: 1.6 }}>
             <p className="text-secondary">
-              Physical access terminals (e.g., ESP32 biometric turnstiles and door controllers) must be provisioned securely to prevent credential tampering:
+              Physical access terminals (e.g., ESP32 biometric turnstiles and door controllers) must be provisioned securely to mitigate credential tampering:
             </p>
             <div
               style={{
