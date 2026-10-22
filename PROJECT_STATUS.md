@@ -1,19 +1,20 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 23, 2026  
-**Current Milestone:** Increment 3D — Compliance Correction & Controlled Frontend Deployment (In Progress)  
+**Current Milestone:** Increment 3D — Compliance Correction & Controlled Frontend Deployment (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; 133 frontend tests and 334 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; production frontend deployed to Azure Static Web Apps `proud-glacier-03b4ad100.3.azurestaticapps.net` via Deployment `2d61f828-8c71-4356-a8eb-2b22a0844ebf`; 133 frontend tests and 334 backend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 
 ---
 
 ## 1. Executive Status
-Increment 3D refines the Increment 3C enterprise role-aware user experience and UI component foundation with rigorous compliance disclosures and controlled Azure deployment:
+Increment 3D successfully corrects remaining compliance disclosures and executes a controlled, verified production deployment of the VoiceLock Enterprise frontend to Azure Static Web Apps:
 1. **Compliance & Security Claim Correction:** Replaced all unsubstantiated claims with precise, verifiable engineering disclosures. Specifically, liveness protection is explicitly documented as mitigating simple audio replay attacks while acknowledging it does not guarantee protection against sophisticated voice cloning, deepfakes, or all presentation attacks. Audio retention guarantees were replaced with an accurate description of temporary server spooling during STT/inference with immediate unlinking upon completion. Non-repudiation guarantees were replaced with server-enforced identity binding verification.
 2. **Distinct Probe Error Separation:** Refined `OverviewPage.tsx` so that network failures, authentication lapses (401), or backend errors during identity mapping probes are explicitly flagged as `PROBE FAILED` / `Biometric Enrollment Status Unavailable` rather than mislabeled as an unmapped user account.
-3. **Role-Aware Navigation & Routing Protection:** Preserved strict role partitioning across `Sidebar.tsx`, `Header.tsx`, and `App.tsx`. Standard users (`role === 'user'`) are granted access strictly to personal access functions ("Overview" and "Voice Verification"). Administrative navigation items ("Enrolled Speakers", "Identity Mappings", "Access Terminals", "Security Audit Log") are omitted from sidebar navigation. Direct navigation or tab spoofing to restricted administrative modules is intercepted by an explicit access-control boundary in `App.tsx`. Furthermore, non-admin sessions completely bypass administrative telemetry endpoints (`getSpeakers`, `getDevices`, `getAdminMappings`), eliminating 403 request storms.
-4. **Accessible UI Component Foundation & Zero Mock Data:** Preserved reusable, accessible primitives in `frontend/src/components/ui/` (`Card`, `Button`, `Badge`, `Alert`). Purged all mock devices and mock security events in favor of live API integration and transparent provisioning placeholders.
+3. **Role-Aware Navigation & Routing Protection:** Preserved strict role partitioning across `Sidebar.tsx`, `Header.tsx`, and `App.tsx`. Standard users (`role === 'user'`) are granted access strictly to personal access functions ("Overview" and "Voice Verification"). Administrative navigation items ("Enrolled Speakers", "Identity Mappings", "Access Terminals", "Security Audit Log") are omitted from sidebar navigation. Direct navigation or tab spoofing to restricted administrative modules is intercepted by an explicit access-control boundary in `App.tsx`.
+4. **Controlled Frontend-Only Deployment:** Deployed the tested frontend bundle (`dist/assets/index-DfN9ZScM.js` 471.63 kB / gzip 133.14 kB, `index-M54cu_1s.css` 8.24 kB / gzip 2.45 kB) to Azure Static Web Apps (`voicelock-web` at `proud-glacier-03b4ad100.3.azurestaticapps.net`, Deployment ID: `2d61f828-8c71-4356-a8eb-2b22a0844ebf`).
+5. **Live Production Smoke Testing & Verification:** Verified live HTTP 200 response and asset chunk hashes. Confirmed Google-authenticated administrator access (all 6 navigation tabs, 10 enrolled speakers from backend, 0 live devices with provisioning modal, transparent audit stream placeholder). Confirmed read-only protection of backend endpoints (401 on unauthorized calls). Verified zero production database mutations (row counts unchanged).
 
 ---
 
