@@ -359,3 +359,58 @@ def test_data_minimization_no_sensitive_fields_in_responses():
     text2 = resp2.text.lower()
     assert "embedding" not in text2
     assert "secret" not in text2
+
+
+def test_cors_preflight_allows_delete_method():
+    """Verify OPTIONS preflight allows DELETE method for approved origins."""
+    headers = {
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization",
+    }
+    response = client.options("/admin/mappings/1", headers=headers)
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    allowed_methods = [m.strip() for m in response.headers.get("access-control-allow-methods", "").split(",")]
+    assert "DELETE" in allowed_methods
+    assert "GET" in allowed_methods
+    assert "POST" in allowed_methods
+
+
+def test_cors_preflight_allows_delete_method_production_frontend():
+    """Verify OPTIONS preflight allows DELETE method for the production frontend origin."""
+    prod_origin = "https://proud-glacier-03b4ad100.3.azurestaticapps.net"
+    with patch.dict("os.environ", {"ALLOWED_CORS_ORIGINS": prod_origin}):
+        from app.main import create_app
+        prod_app = create_app()
+        prod_client = TestClient(prod_app)
+        headers = {
+            "Origin": prod_origin,
+            "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "authorization",
+        }
+        response = prod_client.options("/admin/mappings/1", headers=headers)
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == prod_origin
+        allowed_methods = [m.strip() for m in response.headers.get("access-control-allow-methods", "").split(",")]
+        assert "DELETE" in allowed_methods
+        assert "GET" in allowed_methods
+        assert "POST" in allowed_methods
+
+
+def test_cors_preflight_rejects_unapproved_origin():
+    """Verify OPTIONS preflight does not grant CORS access to unapproved origins."""
+    headers = {
+        "Origin": "https://malicious-unapproved-site.example.com",
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization",
+    }
+    response = client.options("/admin/mappings/1", headers=headers)
+    assert response.headers.get("access-control-allow-origin") is None
+
+
+def test_unauthenticated_delete_returns_401():
+    """Verify unauthenticated DELETE /admin/mappings/{id} returns 401 before handler execution."""
+    response = client.delete("/admin/mappings/999")
+    assert response.status_code == 401
+    assert "Missing Authorization header" in response.json().get("detail", "")
