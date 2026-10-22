@@ -1,7 +1,9 @@
 import React from 'react';
-import { Info, Radio, Database, LogOut, User } from 'lucide-react';
+import { Database, LogOut, User, Mic } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 import { useAuth } from '../../context/useAuth';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
 
 interface HeaderProps {
   activeTab: NavigationTab;
@@ -10,19 +12,22 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerification }) => {
   const { user, signOut } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   const titles: Record<NavigationTab, { title: string; subtitle: string }> = {
     overview: {
-      title: 'Operations Dashboard',
-      subtitle: 'Real-time biometric access control, terminal health, and threat mitigation',
+      title: isAdmin ? 'System Operations Dashboard' : 'Personal Biometric Access Portal',
+      subtitle: isAdmin
+        ? 'Real-time biometric access telemetry, hardware status, and threshold calibration'
+        : 'Manage your enrolled voice identity and access physical security portals',
     },
     speakers: {
-      title: 'Enrolled Speaker Identities',
-      subtitle: '192-dimensional acoustic voiceprint registry and authorization mappings',
+      title: 'Enrolled Speaker Registry',
+      subtitle: '192-dimensional acoustic voiceprint registry and authorization records',
     },
     verification: {
-      title: 'Voice Verification Testing Portal',
-      subtitle: 'Simulate challenge-response liveness detection and ECAPA-TDNN inference',
+      title: 'Voice Verification Portal',
+      subtitle: 'Cryptographic challenge-response liveness detection and ECAPA-TDNN speaker verification',
     },
     devices: {
       title: 'Physical Access Terminals',
@@ -30,7 +35,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
     },
     events: {
       title: 'Security Audit Log',
-      subtitle: 'Comprehensive audit stream: liveness checks, replay alerts, and auth decisions',
+      subtitle: 'Enterprise security journal: liveness checks, replay alerts, and administrative actions',
     },
     identities: {
       title: 'Identity Management',
@@ -38,29 +43,28 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
     },
   };
 
-  const { title, subtitle } = titles[activeTab];
+  const { title, subtitle } = titles[activeTab] || titles.overview;
 
   return (
     <header className="top-header">
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <h1 className="text-xl font-bold text-primary" style={{ letterSpacing: '-0.01em' }}>
+          <h1 className="text-xl font-bold text-primary" style={{ letterSpacing: '-0.01em', margin: 0 }}>
             {title}
           </h1>
-          <span
-            className="badge badge-prototype"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-          >
-            <Info size={11} /> Prototype Mode (Mock Data)
-          </span>
+          {user?.isDemoUser ? (
+            <Badge variant="warning">Local Demonstration</Badge>
+          ) : (
+            <Badge variant="success">Cloud Operations</Badge>
+          )}
         </div>
-        <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
+        <p className="text-xs text-muted" style={{ marginTop: '3px', margin: 0 }}>
           {subtitle}
         </p>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-        {/* System Telemetry Badge */}
+        {/* Backend Connectivity Status */}
         <div
           style={{
             display: 'flex',
@@ -88,7 +92,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
           <span className="text-xs text-muted">|</span>
           <Database size={13} color="#94A3B8" />
           <span className="text-xs font-mono text-secondary">
-            Postgres / SQLite
+            Postgres
           </span>
         </div>
 
@@ -109,20 +113,20 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
               style={{
                 width: '26px',
                 height: '26px',
-                borderRadius: '50%',
-                background: user.role === 'admin' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                borderRadius: 'var(--radius-sm)',
+                background: isAdmin ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
             >
-              <User size={14} color={user.role === 'admin' ? '#60A5FA' : '#34D399'} />
+              <User size={14} color={isAdmin ? '#60A5FA' : '#34D399'} />
             </div>
             <div style={{ lineHeight: '1.2' }}>
               <div className="text-xs font-semibold text-primary" style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {user.displayName || user.email}
               </div>
-              <div className="text-xs font-mono" style={{ color: user.role === 'admin' ? '#60A5FA' : '#34D399', fontSize: '10px' }}>
+              <div className="text-xs font-mono" style={{ color: isAdmin ? '#60A5FA' : '#34D399', fontSize: '10px' }}>
                 {user.role.toUpperCase()}
               </div>
             </div>
@@ -131,7 +135,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
               title="Sign Out"
               aria-label="Sign Out"
               className="btn btn-secondary"
-              style={{ padding: '4px 6px', marginLeft: '4px', border: 'none', background: 'transparent' }}
+              style={{ padding: '4px 6px', marginLeft: '4px', border: 'none', background: 'transparent', cursor: 'pointer' }}
             >
               <LogOut size={14} color="var(--text-muted)" />
             </button>
@@ -140,13 +144,13 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
 
         {/* Quick action button */}
         {activeTab !== 'verification' && onOpenQuickVerification && (
-          <button
+          <Button
+            variant="default"
+            size="sm"
             onClick={onOpenQuickVerification}
-            className="btn btn-primary"
-            style={{ padding: '6px 14px', fontSize: '12px' }}
           >
-            <Radio size={14} /> Simulate Verification
-          </button>
+            <Mic size={14} /> Quick Verification
+          </Button>
         )}
       </div>
     </header>

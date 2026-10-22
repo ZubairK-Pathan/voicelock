@@ -12,8 +12,16 @@ import {
   Database,
   RefreshCw,
   Lock,
+  User,
+  Mic,
+  KeyRound,
 } from 'lucide-react';
 import { StatCard } from '../common/StatCard';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/Card';
+import { Alert, AlertTitle, AlertDescription } from '../ui/Alert';
+import { useAuth } from '../../context/useAuth';
 import { apiClient } from '../../lib/apiClient';
 import type { NavigationTab, VerificationMetricsResponse } from '../../types';
 
@@ -22,6 +30,10 @@ interface OverviewPageProps {
 }
 
 export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
+  // ─── Administrator Overview State ──────────────────────────────────────────
   const [speakersCount, setSpeakersCount] = useState<number | null>(null);
   const [devicesCount, setDevicesCount] = useState<number | null>(null);
   const [activeDevicesCount, setActiveDevicesCount] = useState<number | null>(null);
@@ -31,11 +43,16 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
   const [statusCode, setStatusCode] = useState<number | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
+  // ─── Regular User Overview State ───────────────────────────────────────────
+  const [userMappingStatus, setUserMappingStatus] = useState<'checking' | 'mapped' | 'unmapped' | 'error'>('checking');
+  const [linkedSpeakerName, setLinkedSpeakerName] = useState<string | null>(null);
+
   const handleRefresh = useCallback(() => {
     setIsLoading(true);
     setRefreshTrigger((prev) => prev + 1);
   }, []);
 
+  // ─── Telemetry Fetching ───────────────────────────────────────────────────
   useEffect(() => {
     let ignore = false;
 
@@ -44,96 +61,129 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       setError(null);
       setStatusCode(null);
 
-      try {
-        const [speakersRes, devicesRes, metricsRes] = await Promise.all([
-          apiClient.getSpeakers(),
-          apiClient.getDevices(),
-          apiClient.getVerificationMetrics(),
-        ]);
+      if (isAdmin) {
+        // Administrator Telemetry Loading
+        try {
+          const [speakersRes, devicesRes, metricsRes] = await Promise.all([
+            apiClient.getSpeakers(),
+            apiClient.getDevices(),
+            apiClient.getVerificationMetrics(),
+          ]);
 
-        if (ignore) return;
+          if (ignore) return;
 
-        // Check for 401 Unauthorized across any endpoint
-        if (
-          speakersRes.status === 401 ||
-          devicesRes.status === 401 ||
-          metricsRes.status === 401
-        ) {
-          setStatusCode(401);
-          setError(
-            'Your operator session has expired or is unauthenticated. Please re-authenticate to view live system metrics.'
-          );
-          setSpeakersCount(null);
-          setDevicesCount(null);
-          setActiveDevicesCount(null);
-          setVerificationMetrics(null);
-          return;
-        }
+          // Check for 401 Unauthorized across any endpoint
+          if (
+            speakersRes.status === 401 ||
+            devicesRes.status === 401 ||
+            metricsRes.status === 401
+          ) {
+            setStatusCode(401);
+            setError(
+              'Your operator session has expired or is unauthenticated. Please re-authenticate to view live system metrics.'
+            );
+            setSpeakersCount(null);
+            setDevicesCount(null);
+            setActiveDevicesCount(null);
+            setVerificationMetrics(null);
+            return;
+          }
 
-        // Check for 403 Forbidden across any endpoint
-        if (
-          speakersRes.status === 403 ||
-          devicesRes.status === 403 ||
-          metricsRes.status === 403
-        ) {
-          setStatusCode(403);
-          setError(
-            'Administrative privileges are required to retrieve system telemetry and registries. Non-administrative operators are restricted.'
-          );
-          setSpeakersCount(null);
-          setDevicesCount(null);
-          setActiveDevicesCount(null);
-          setVerificationMetrics(null);
-          return;
-        }
+          // Check for 403 Forbidden across any endpoint
+          if (
+            speakersRes.status === 403 ||
+            devicesRes.status === 403 ||
+            metricsRes.status === 403
+          ) {
+            setStatusCode(403);
+            setError(
+              'Administrative privileges are required to retrieve system telemetry and registries. Non-administrative operators are restricted.'
+            );
+            setSpeakersCount(null);
+            setDevicesCount(null);
+            setActiveDevicesCount(null);
+            setVerificationMetrics(null);
+            return;
+          }
 
-        // Check for success or error
-        if (speakersRes.ok && speakersRes.data) {
-          setSpeakersCount(speakersRes.data.count);
-        } else {
-          setSpeakersCount(null);
-        }
+          if (speakersRes.ok && speakersRes.data) {
+            setSpeakersCount(speakersRes.data.count);
+          } else {
+            setSpeakersCount(null);
+          }
 
-        if (devicesRes.ok && devicesRes.data) {
-          setDevicesCount(devicesRes.data.total);
-          setActiveDevicesCount(devicesRes.data.active_count);
-        } else {
-          setDevicesCount(null);
-          setActiveDevicesCount(null);
-        }
+          if (devicesRes.ok && devicesRes.data) {
+            setDevicesCount(devicesRes.data.total);
+            setActiveDevicesCount(devicesRes.data.active_count);
+          } else {
+            setDevicesCount(null);
+            setActiveDevicesCount(null);
+          }
 
-        if (metricsRes.ok && metricsRes.data) {
-          setVerificationMetrics(metricsRes.data);
-        } else {
-          setVerificationMetrics(null);
-        }
+          if (metricsRes.ok && metricsRes.data) {
+            setVerificationMetrics(metricsRes.data);
+          } else {
+            setVerificationMetrics(null);
+          }
 
-        if (!speakersRes.ok && !devicesRes.ok && !metricsRes.ok) {
-          setStatusCode(speakersRes.status || devicesRes.status || metricsRes.status);
-          setError(
-            speakersRes.error ||
-              devicesRes.error ||
-              metricsRes.error ||
-              'Failed to retrieve system metrics from the database backend.'
-          );
-        } else if (!metricsRes.ok && (speakersRes.ok || devicesRes.ok)) {
-          setError(
-            metricsRes.error || 'Verification telemetry endpoint returned an error.'
-          );
-          setStatusCode(metricsRes.status);
+          if (!speakersRes.ok && !devicesRes.ok && !metricsRes.ok) {
+            setStatusCode(speakersRes.status || devicesRes.status || metricsRes.status);
+            setError(
+              speakersRes.error ||
+                devicesRes.error ||
+                metricsRes.error ||
+                'Failed to retrieve system metrics from the database backend.'
+            );
+          } else if (!metricsRes.ok && (speakersRes.ok || devicesRes.ok)) {
+            setError(
+              metricsRes.error || 'Verification telemetry endpoint returned an error.'
+            );
+            setStatusCode(metricsRes.status);
+          }
+        } catch {
+          if (!ignore) {
+            setStatusCode(0);
+            setError('Network communication failed while connecting to the VoiceLock API backend.');
+            setSpeakersCount(null);
+            setDevicesCount(null);
+            setActiveDevicesCount(null);
+            setVerificationMetrics(null);
+          }
+        } finally {
+          if (!ignore) {
+            setIsLoading(false);
+          }
         }
-      } catch {
-        if (!ignore) {
-          setStatusCode(0);
-          setError('Network communication failed while connecting to the VoiceLock API backend.');
-          setSpeakersCount(null);
-          setDevicesCount(null);
-          setActiveDevicesCount(null);
-          setVerificationMetrics(null);
-        }
-      } finally {
-        if (!ignore) {
-          setIsLoading(false);
+      } else {
+        // Regular User Enrollment Status Probe
+        // Checks whether user account is mapped to an enrolled voice identity without calling admin APIs
+        try {
+          const probeSessionId = `probe-${Date.now()}`;
+          const res = await apiClient.createChallenge({ session_id: probeSessionId });
+          if (ignore) return;
+
+          if (res.ok && res.data) {
+            setUserMappingStatus('mapped');
+            setLinkedSpeakerName(res.data.claimed_identity);
+          } else if (res.status === 403) {
+            setUserMappingStatus('unmapped');
+            setLinkedSpeakerName(null);
+          } else if (res.status === 401) {
+            setUserMappingStatus('error');
+            setError('Your operator session has expired. Please sign in again.');
+          } else {
+            setUserMappingStatus('error');
+            setError(res.error || 'Failed to determine biometric enrollment status.');
+          }
+        } catch {
+          if (!ignore) {
+            setUserMappingStatus('error');
+            setError('Network communication failure while verifying account status.');
+          }
+        } finally {
+          if (!ignore) {
+            setIsLoading(false);
+          }
         }
       }
     }
@@ -143,8 +193,9 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
     return () => {
       ignore = true;
     };
-  }, [refreshTrigger]);
+  }, [isAdmin, refreshTrigger]);
 
+  // ─── Subtitles for Administrator View ──────────────────────────────────────
   const getSpeakersSubtitle = () => {
     if (isLoading) return 'Querying biometric registry...';
     if (statusCode === 401) return 'Session unauthenticated';
@@ -184,6 +235,250 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
     return `${verificationMetrics.verified} verified of ${evaluated} evaluated attempts`;
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REGULAR OPERATOR VIEW
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (!isAdmin) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        {/* User Welcome & Portal Header */}
+        <div
+          className="card"
+          style={{
+            background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.08) 0%, rgba(14, 20, 34, 0.8) 100%)',
+            borderLeft: '4px solid var(--color-brand)',
+            padding: '18px 22px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '14px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(59, 130, 246, 0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--color-brand)',
+              }}
+            >
+              <User size={22} />
+            </div>
+            <div>
+              <div className="text-base font-semibold text-primary">
+                Operator Portal — {user?.displayName || user?.email}
+              </div>
+              <div className="text-xs text-secondary" style={{ marginTop: '2px' }}>
+                VoiceLock Enterprise Biometric Access Control & Physical Security
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Badge variant="default">OPERATOR ROLE</Badge>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isLoading}
+            >
+              <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} /> Refresh
+            </Button>
+          </div>
+        </div>
+
+        {/* Error Alert */}
+        {error && (
+          <Alert variant="destructive">
+            <AlertTitle>Authentication Status Notice</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Grid: Identity Card + Primary Verification CTA */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
+          {/* Biometric Identity Binding Status */}
+          <Card>
+            <CardHeader>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <CardTitle>Biometric Voiceprint Status</CardTitle>
+                {isLoading ? (
+                  <Badge variant="secondary">Verifying...</Badge>
+                ) : userMappingStatus === 'mapped' ? (
+                  <Badge variant="success">ENROLLED & ACTIVE</Badge>
+                ) : userMappingStatus === 'unmapped' ? (
+                  <Badge variant="warning">UNMAPPED ACCOUNT</Badge>
+                ) : (
+                  <Badge variant="destructive">UNAVAILABLE</Badge>
+                )}
+              </div>
+              <CardDescription>
+                Persistent account association in the enterprise UserSpeakerMapping registry
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <RefreshCw size={18} className="animate-spin" style={{ margin: '0 auto 8px' }} />
+                  <div className="text-xs">Resolving identity mapping from server...</div>
+                </div>
+              ) : userMappingStatus === 'mapped' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.2)',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    <div className="text-xs font-semibold" style={{ color: '#34D399' }}>
+                      Linked Voiceprint Profile
+                    </div>
+                    <div className="font-mono text-xl font-bold text-primary" style={{ marginTop: '4px' }}>
+                      {linkedSpeakerName}
+                    </div>
+                    <div className="text-xs text-secondary" style={{ marginTop: '4px' }}>
+                      Authorized for 1-to-1 challenge verification at all enrolled terminals.
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted" style={{ lineHeight: 1.5 }}>
+                    Your Firebase account UID (<span className="font-mono text-secondary">{user?.uid}</span>) is bound to this speaker voiceprint. All verification attempts are validated server-side to guarantee non-repudiation.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      background: 'rgba(245, 158, 11, 0.08)',
+                      border: '1px solid rgba(245, 158, 11, 0.2)',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    <div className="text-xs font-semibold" style={{ color: '#FBBF24', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={14} /> Action Required: Identity Unmapped
+                    </div>
+                    <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.5 }}>
+                      Your authenticated account has not yet been linked to an enrolled speaker voiceprint in the database.
+                    </p>
+                  </div>
+                  <div
+                    style={{
+                      background: 'rgba(0, 0, 0, 0.3)',
+                      padding: '10px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '11px',
+                      fontFamily: 'monospace',
+                      color: '#94A3B8',
+                    }}
+                  >
+                    Account UID: {user?.uid}
+                  </div>
+                  <p className="text-xs text-muted" style={{ lineHeight: 1.5, margin: 0 }}>
+                    Please provide your Firebase UID to a VoiceLock administrator. Once linked via the Identity Management panel, your voice biometric verification will be authorized automatically.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Quick Verification Entry Point Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Voice Biometric Verification</CardTitle>
+              <CardDescription>
+                Verify identity using cryptographic challenge-response and ECAPA-TDNN AI
+              </CardDescription>
+            </CardHeader>
+            <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div
+                style={{
+                  padding: '16px',
+                  background: 'rgba(59, 130, 246, 0.06)',
+                  border: '1px solid rgba(59, 130, 246, 0.2)',
+                  borderRadius: 'var(--radius-sm)',
+                  display: 'flex',
+                  gap: '12px',
+                  alignItems: 'flex-start',
+                }}
+              >
+                <Mic size={22} color="#60A5FA" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div className="text-xs font-semibold text-primary">
+                    Stateful Anti-Spoofing Challenge-Response
+                  </div>
+                  <p className="text-xs text-secondary" style={{ marginTop: '4px', lineHeight: 1.5 }}>
+                    When verifying, the server issues a single-use 3-digit randomized sequence with a 60-second time-to-live. Offline Vosk STT confirms spoken digits before SpeechBrain runs biometric matching.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 'auto' }}>
+                <Button
+                  variant="default"
+                  size="lg"
+                  onClick={() => onNavigate('verification')}
+                  style={{ width: '100%' }}
+                >
+                  <Mic size={16} /> Open Voice Verification Terminal <ArrowRight size={16} />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Security & Privacy Standards Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Enterprise Biometric Privacy Standards</CardTitle>
+            <CardDescription>
+              Architectural privacy protections enforced by VoiceLock Enterprise
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
+              <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <ShieldCheck size={14} color="#10B981" /> Ephemeral Audio Processing
+                </div>
+                <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
+                  Voice recordings captured during verification are processed in temporary memory and unlinked immediately. Audio files are never persisted to disk or database.
+                </p>
+              </div>
+
+              <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <KeyRound size={14} color="#60A5FA" /> Single-Use Replay Protection
+                </div>
+                <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
+                  Challenges are atomically invalidated upon consumption (single-attempt invalidation). Pre-recorded or stolen audio cannot be reused to gain unauthorized access.
+                </p>
+              </div>
+
+              <div style={{ padding: '12px 14px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <div className="text-xs font-semibold text-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Lock size={14} color="#8B5CF6" /> 1-to-1 Account Binding
+                </div>
+                <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.4 }}>
+                  Strict server-side RBAC ensures you can only verify against your assigned voice identity. Parameter tampering and speaker identity impersonation are rejected with HTTP 403.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ADMINISTRATOR SYSTEM OVERVIEW
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {/* Top Banner Notice */}
@@ -270,29 +565,29 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {statusCode === 401 ? (
-              <Lock size={18} color="#F59E0B" />
+              <Lock size={18} color="#F59E0B" style={{ flexShrink: 0 }} />
             ) : statusCode === 403 ? (
-              <ShieldAlert size={18} color="#EF4444" />
+              <ShieldAlert size={18} color="#EF4444" style={{ flexShrink: 0 }} />
             ) : (
-              <AlertTriangle size={18} color="#F87171" />
+              <AlertTriangle size={18} color="#F87171" style={{ flexShrink: 0 }} />
             )}
             <div>
               <div
-                className="text-sm font-semibold"
+                className="text-xs font-semibold"
                 style={{
                   color:
                     statusCode === 401
-                      ? '#F59E0B'
+                      ? '#FBBF24'
                       : statusCode === 403
-                      ? '#EF4444'
-                      : '#F87171',
+                      ? '#F87171'
+                      : '#FCA5A5',
                 }}
               >
                 {statusCode === 401
-                  ? 'Authentication Expired'
+                  ? 'Authentication Required'
                   : statusCode === 403
                   ? 'Administrative Access Restricted'
-                  : 'Backend Connection Error'}
+                  : 'Backend Telemetry Error'}
               </div>
               <div className="text-xs text-secondary" style={{ marginTop: '2px' }}>
                 {error}
@@ -302,98 +597,62 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           <button
             onClick={handleRefresh}
             className="btn btn-secondary"
-            style={{ fontSize: '12px', padding: '5px 12px' }}
+            style={{ fontSize: '11px', padding: '4px 10px' }}
           >
             Retry Query
           </button>
         </div>
       )}
 
-      {/* Primary Telemetry Grid */}
-      <div className="stat-grid">
+      {/* KPI Cards Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
         <StatCard
-          title="Registered Speakers"
+          title="Enrolled Biometric Profiles"
           value={isLoading ? '—' : speakersCount !== null ? speakersCount : '—'}
           subtitle={getSpeakersSubtitle()}
-          icon={<Users size={20} color="#3B82F6" />}
-          iconBgColor="rgba(59, 130, 246, 0.15)"
+          icon={<Users size={20} />}
         />
         <StatCard
-          title="Access Terminals"
+          title="Physical Access Terminals"
           value={isLoading ? '—' : devicesCount !== null ? devicesCount : '—'}
           subtitle={getDevicesSubtitle()}
-          icon={<Cpu size={20} color="#10B981" />}
-          iconBgColor="rgba(16, 185, 129, 0.15)"
+          icon={<Cpu size={20} />}
         />
         <StatCard
-          title="Verification Success Rate"
+          title="Biometric Success Rate"
           value={getSuccessRateValue()}
           subtitle={getSuccessRateSubtitle()}
-          icon={
-            <CheckCircle2
-              size={20}
-              color={verificationMetrics !== null ? '#10B981' : '#64748B'}
-            />
-          }
-          iconBgColor={
-            verificationMetrics !== null
-              ? 'rgba(16, 185, 129, 0.15)'
-              : 'rgba(100, 116, 139, 0.15)'
-          }
+          icon={<CheckCircle2 size={20} />}
         />
         <StatCard
-          title="Security Incidents"
-          value="—"
-          subtitle="Security event journal uninstrumented"
-          icon={<AlertTriangle size={20} color="#64748B" />}
-          iconBgColor="rgba(100, 116, 139, 0.15)"
-          trend={{ value: 'Telemetry Offline', isPositive: false }}
+          title="Total Verification Attempts"
+          value={isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.total : '—'}
+          subtitle={
+            isLoading
+              ? 'Querying verification log...'
+              : verificationMetrics !== null
+              ? `${verificationMetrics.verified} verified, ${verificationMetrics.rejected} rejected`
+              : 'Audit log uninstrumented'
+          }
+          icon={<Radio size={20} />}
         />
       </div>
 
-      {/* Verification Telemetry Breakdown */}
+      {/* Verification Telemetry Breakdown Card */}
       <div className="card">
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: '16px',
-            flexWrap: 'wrap',
-            gap: '10px',
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
           <div>
-            <h3 className="text-base font-semibold text-primary">Biometric Verification Telemetry</h3>
-            <p className="text-xs text-secondary" style={{ marginTop: '2px' }}>
-              Persistent outcome aggregates from live verification events (ECAPA-TDNN & Vosk Liveness)
+            <h3 className="text-base font-semibold text-primary">Biometric Decision Telemetry</h3>
+            <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
+              Persistent outcome categorization from VerificationEvent records
             </p>
           </div>
-          <span
-            className={`badge ${
-              isLoading
-                ? 'badge-suspended'
-                : verificationMetrics && verificationMetrics.total > 0
-                ? 'badge-active'
-                : 'badge-suspended'
-            } font-mono`}
-          >
-            {isLoading
-              ? 'Querying...'
-              : verificationMetrics
-              ? `${verificationMetrics.total} Total Attempts`
-              : 'Telemetry Offline'}
+          <span className="badge badge-active font-mono">
+            {verificationMetrics ? `${verificationMetrics.total} Total Attempts` : 'Live Telemetry'}
           </span>
         </div>
 
-        {/* 4 Outcome Stat Chips */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '12px',
-          }}
-        >
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
           {/* Verified */}
           <div
             style={{
@@ -572,7 +831,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Urgent Security Alerts */}
+        {/* Threat & Replay Monitoring */}
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <div>
@@ -615,7 +874,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
               </div>
             </div>
 
-            {/* Crucial Security Disclosure: Absence of events does not imply zero threat */}
+            {/* Security Disclosure: Absence of events does not imply zero threat */}
             <div
               style={{
                 padding: '12px',

@@ -1,31 +1,95 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
-  ShieldAlert,
   Info,
+  Lock,
+  Database,
 } from 'lucide-react';
-import { SearchBar } from '../common/SearchBar';
-import { Badge } from '../common/Badge';
-import { Modal } from '../common/Modal';
-import { MOCK_SECURITY_EVENTS } from '../../data/mockData';
-import type { SecurityEvent, EventSeverity } from '../../types';
+import { Badge } from '../ui/Badge';
+import { useAuth } from '../../context/useAuth';
 
 export const SecurityEventsPage: React.FC = () => {
-  const [events] = useState<SecurityEvent[]>(MOCK_SECURITY_EVENTS);
-  const [search, setSearch] = useState('');
-  const [severityFilter, setSeverityFilter] = useState<'all' | EventSeverity>('all');
-  const [selectedEvent, setSelectedEvent] = useState<SecurityEvent | null>(null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
-  const filteredEvents = events.filter((evt) => {
-    const matchesSearch =
-      evt.event_type.toLowerCase().includes(search.toLowerCase()) ||
-      evt.details.toLowerCase().includes(search.toLowerCase()) ||
-      evt.source.toLowerCase().includes(search.toLowerCase()) ||
-      (evt.speaker_id && evt.speaker_id.toLowerCase().includes(search.toLowerCase())) ||
-      (evt.device_id && evt.device_id.toLowerCase().includes(search.toLowerCase()));
-    const matchesSeverity =
-      severityFilter === 'all' || evt.severity === severityFilter;
-    return matchesSearch && matchesSeverity;
-  });
+  // Non-admin presentation guard
+  if (!isAdmin) {
+    return (
+      <div
+        className="card"
+        style={{
+          padding: '48px 24px',
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '16px',
+          maxWidth: '560px',
+          margin: '40px auto',
+        }}
+      >
+        <div
+          style={{
+            width: '52px',
+            height: '52px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(239, 68, 68, 0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+          }}
+        >
+          <Lock size={26} color="#EF4444" />
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-primary">Administrator Authorization Required</h2>
+          <p className="text-xs text-secondary" style={{ marginTop: '8px', lineHeight: 1.6 }}>
+            The enterprise security audit log is restricted to verified administrators.
+            Standard operators cannot inspect system security events or threat telemetry.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const auditTaxonomy = [
+    {
+      type: 'admin_action',
+      label: 'Administrative Actions',
+      severity: 'low',
+      description: 'Account-to-speaker identity link and unlink operations with actor UID audit bindings.',
+      status: 'Active (Journaled in PostgreSQL)',
+    },
+    {
+      type: 'rate_limit_exceeded',
+      label: 'Rate Limiting Violations',
+      severity: 'medium',
+      description: 'Sliding-window threshold exceedance across verification or challenge endpoints.',
+      status: 'Enforced in Memory',
+    },
+    {
+      type: 'hmac_nonce_replay',
+      label: 'HMAC Nonce Replay Attacks',
+      severity: 'high',
+      description: 'Detected duplicate nonce consumption on physical access terminal requests.',
+      status: 'Enforced in Memory',
+    },
+    {
+      type: 'unauthorized_access',
+      label: 'Unauthorized Speaker Claims',
+      severity: 'high',
+      description: 'Ordinary operators attempting verification against unassigned speaker identities.',
+      status: 'Blocked at Database Layer',
+    },
+    {
+      type: 'payload_too_large',
+      label: 'Upload Size Violations',
+      severity: 'low',
+      description: 'Streaming audio bodies exceeding MAX_AUDIO_SIZE_BYTES (10MB limit).',
+      status: 'Blocked at ASGI Layer',
+    },
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -35,214 +99,119 @@ export const SecurityEventsPage: React.FC = () => {
         style={{
           background: 'rgba(59, 130, 246, 0.08)',
           borderLeft: '4px solid var(--color-brand)',
-          padding: '14px 20px',
-        }}
-      >
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <Info size={18} color="#60A5FA" style={{ flexShrink: 0 }} />
-          <span className="text-xs text-secondary">
-            VoiceLock security logs capture atomic challenge lifecycle events, HMAC nonce replay detections, and biometric threshold evaluations. All timestamps are UTC-synchronized.
-          </span>
-        </div>
-      </div>
-
-      {/* Filter Bar */}
-      <div
-        className="card"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '14px',
           padding: '16px 20px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search by event type, IP, device, or details..."
-            count={filteredEvents.length}
-          />
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {(['all', 'critical', 'high', 'medium', 'low'] as const).map((sev) => (
-              <button
-                key={sev}
-                onClick={() => setSeverityFilter(sev)}
-                className="btn btn-secondary"
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  textTransform: 'capitalize',
-                  borderColor:
-                    severityFilter === sev
-                      ? 'var(--color-brand)'
-                      : 'var(--border-subtle)',
-                  background:
-                    severityFilter === sev
-                      ? 'rgba(59, 130, 246, 0.12)'
-                      : 'var(--bg-surface)',
-                  color:
-                    severityFilter === sev
-                      ? '#FFFFFF'
-                      : 'var(--text-secondary)',
-                }}
-              >
-                {sev}
-              </button>
-            ))}
+        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+          <Info size={20} color="#60A5FA" style={{ flexShrink: 0, marginTop: '2px' }} />
+          <div>
+            <div className="text-sm font-semibold text-primary">
+              Enterprise Security Journal — Ingestion Active
+            </div>
+            <p className="text-xs text-secondary" style={{ marginTop: '4px', lineHeight: 1.6 }}>
+              VoiceLock journals security-critical incidents directly to the persistent database table <code className="font-mono text-primary">security_events</code>. All administrative identity links and unlinks from Increment 2A/2B are committed atomically in the same transaction.
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Audit Log Table */}
+      {/* Deliberate Unintegrated Status Card */}
+      <div
+        className="card"
+        style={{
+          padding: '36px 24px',
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '14px',
+          background: 'rgba(14, 20, 34, 0.4)',
+          border: '1px dashed rgba(255, 255, 255, 0.1)',
+        }}
+      >
+        <div
+          style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: '50%',
+            background: 'rgba(59, 130, 246, 0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#60A5FA',
+          }}
+        >
+          <Database size={24} />
+        </div>
+        <div style={{ maxWidth: '540px' }}>
+          <h3 className="text-base font-semibold text-primary">
+            Audit Stream Query API Provisioning in Progress
+          </h3>
+          <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.6 }}>
+            The backend audit repository and database migration are active, but the authenticated read endpoint for streaming and searching <code className="font-mono">security_events</code> is scheduled for Increment 4. Prototype mock events have been retired to preserve enterprise data integrity.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+          <Badge variant="success">DB Table: security_events</Badge>
+          <Badge variant="default">Alembic Migration: Applied</Badge>
+          <Badge variant="secondary">Zero Mock Records</Badge>
+        </div>
+      </div>
+
+      {/* Configured Audit Policy Taxonomy Table */}
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <h3 className="text-sm font-semibold text-primary" style={{ margin: 0 }}>
+            Configured Audit Event Taxonomy (Database Policy)
+          </h3>
+          <p className="text-xs text-muted" style={{ margin: '2px 0 0 0' }}>
+            Event classifications actively recognized and handled by the VoiceLock security model
+          </p>
+        </div>
         <div className="table-container">
           <table className="enterprise-table">
             <thead>
               <tr>
-                <th>Timestamp</th>
-                <th>Event Type</th>
+                <th>Event Taxonomy Type</th>
+                <th>Classification</th>
                 <th>Severity</th>
-                <th>Network / Source</th>
-                <th>Related Identity / Device</th>
-                <th>Details</th>
-                <th>Action</th>
+                <th>Security Boundary & Description</th>
+                <th>Enforcement Layer</th>
               </tr>
             </thead>
             <tbody>
-              {filteredEvents.length > 0 ? (
-                filteredEvents.map((evt) => (
-                  <tr key={evt.id}>
-                    <td className="font-mono text-xs text-muted" style={{ whiteSpace: 'nowrap' }}>
-                      {evt.timestamp}
-                    </td>
-                    <td>
-                      <span className="font-mono text-xs font-semibold text-primary">
-                        {evt.event_type}
-                      </span>
-                    </td>
-                    <td>
-                      <Badge value={evt.severity} />
-                    </td>
-                    <td className="font-mono text-xs text-secondary">
-                      {evt.source}
-                    </td>
-                    <td>
-                      {evt.speaker_id && (
-                        <div className="text-xs text-primary font-medium">
-                          Speaker: {evt.speaker_id}
-                        </div>
-                      )}
-                      {evt.device_id && (
-                        <div className="font-mono text-xs text-muted">
-                          Terminal: {evt.device_id}
-                        </div>
-                      )}
-                      {!evt.speaker_id && !evt.device_id && (
-                        <span className="text-xs text-muted">—</span>
-                      )}
-                    </td>
-                    <td style={{ maxWidth: '360px' }}>
-                      <p
-                        className="text-xs text-secondary"
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {evt.details}
-                      </p>
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => setSelectedEvent(evt)}
-                        className="btn btn-secondary"
-                        style={{ padding: '4px 10px', fontSize: '12px' }}
-                      >
-                        Inspect
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '48px 20px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <ShieldAlert size={32} color="var(--text-muted)" />
-                      <div className="text-sm font-semibold text-primary">No matching security events found</div>
-                      <p className="text-xs text-muted">
-                        No events matched your search query "{search}".
-                      </p>
+              {auditTaxonomy.map((item) => (
+                <tr key={item.type}>
+                  <td>
+                    <span className="font-mono text-xs font-semibold text-primary">
+                      {item.type}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="text-xs font-semibold text-primary">{item.label}</div>
+                  </td>
+                  <td>
+                    <Badge variant={item.severity === 'high' ? 'destructive' : item.severity === 'medium' ? 'warning' : 'secondary'}>
+                      {item.severity.toUpperCase()}
+                    </Badge>
+                  </td>
+                  <td>
+                    <div className="text-xs text-secondary" style={{ maxWidth: '420px', lineHeight: 1.4 }}>
+                      {item.description}
                     </div>
                   </td>
+                  <td>
+                    <span className="font-mono text-xs text-muted">
+                      {item.status}
+                    </span>
+                  </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
       </div>
-
-      {/* Event Details Modal */}
-      {selectedEvent && (
-        <Modal
-          isOpen={true}
-          onClose={() => setSelectedEvent(null)}
-          title={`Security Event: ${selectedEvent.event_type}`}
-          subtitle={`Event ID: ${selectedEvent.id} | Timestamp: ${selectedEvent.timestamp}`}
-          footer={
-            <button
-              onClick={() => setSelectedEvent(null)}
-              className="btn btn-secondary"
-            >
-              Close
-            </button>
-          }
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Severity Level</span>
-                <div style={{ marginTop: '4px' }}>
-                  <Badge value={selectedEvent.severity} />
-                </div>
-              </div>
-              <div style={{ padding: '12px', background: 'rgba(14, 20, 34, 0.6)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Event Source / Origin</span>
-                <div className="font-mono text-xs font-semibold text-primary" style={{ marginTop: '4px' }}>
-                  {selectedEvent.source}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ padding: '14px', background: 'rgba(8, 12, 20, 0.7)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
-              <span className="text-xs font-semibold text-secondary" style={{ display: 'block', marginBottom: '6px' }}>
-                Event Log Payload Details:
-              </span>
-              <p className="text-xs text-primary font-mono" style={{ lineHeight: '1.6' }}>
-                {selectedEvent.details}
-              </p>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ padding: '10px 12px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Associated Speaker</span>
-                <div className="text-xs font-semibold text-secondary" style={{ marginTop: '2px' }}>
-                  {selectedEvent.speaker_id || 'N/A (Hardware / Network Event)'}
-                </div>
-              </div>
-              <div style={{ padding: '10px 12px', background: 'rgba(14, 20, 34, 0.4)', borderRadius: 'var(--radius-sm)' }}>
-                <span className="text-xs text-muted">Associated Terminal</span>
-                <div className="font-mono text-xs font-semibold text-secondary" style={{ marginTop: '2px' }}>
-                  {selectedEvent.device_id || 'N/A (Console Action)'}
-                </div>
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 };

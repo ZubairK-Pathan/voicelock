@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, RefreshCw } from 'lucide-react';
+import { Shield, RefreshCw, Lock } from 'lucide-react';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './context/useAuth';
 import { SignInPage } from './components/auth/SignInPage';
@@ -12,6 +12,7 @@ import { SecurityEventsPage } from './components/pages/SecurityEventsPage';
 import { IdentityManagementPage } from './components/pages/IdentityManagementPage';
 import type { NavigationTab } from './types';
 import { apiClient } from './lib/apiClient';
+import { Button } from './components/ui/Button';
 
 function DashboardApp() {
   const { user, loading, getIdToken } = useAuth();
@@ -28,20 +29,28 @@ function DashboardApp() {
     apiClient.setTokenProvider(getIdToken);
   }, [getIdToken]);
 
-  // Load live telemetry counts when authenticated
+  const isUserAdmin = user?.role === 'admin';
+
+  // Load live telemetry counts when authenticated.
+  // Crucial role separation: Never dispatch administrative requests for non-admin users,
+  // preventing avoidable 403 Forbidden errors in browser network logs.
   useEffect(() => {
     if (!user) return;
     let ignore = false;
 
     async function loadTelemetryCounts() {
+      if (!isUserAdmin) {
+        if (!ignore) {
+          setCounts({});
+        }
+        return;
+      }
+
       try {
-        const isUserAdmin = user?.role === 'admin';
         const [speakersRes, devicesRes, mappingsRes] = await Promise.all([
           apiClient.getSpeakers(),
           apiClient.getDevices(),
-          isUserAdmin
-            ? apiClient.getAdminMappings()
-            : Promise.resolve({ ok: false, data: null, status: 0 }),
+          apiClient.getAdminMappings(),
         ]);
         if (ignore) return;
         setCounts({
@@ -62,7 +71,7 @@ function DashboardApp() {
     return () => {
       ignore = true;
     };
-  }, [user]);
+  }, [user, isUserAdmin]);
 
   // Loading state preventing flash of dashboard
   if (loading) {
@@ -110,6 +119,49 @@ function DashboardApp() {
   }
 
   const renderActivePage = () => {
+    // Direct navigation guard: Ensure non-admins cannot inspect admin modules via manual tab selection
+    if (!isUserAdmin && (activeTab === 'speakers' || activeTab === 'devices' || activeTab === 'events' || activeTab === 'identities')) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '50vh',
+            gap: '18px',
+            textAlign: 'center',
+            padding: '40px 20px',
+          }}
+        >
+          <div
+            style={{
+              width: '52px',
+              height: '52px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Lock size={26} color="#EF4444" />
+          </div>
+          <div style={{ maxWidth: '460px' }}>
+            <h2 className="text-lg font-bold text-primary">Administrator Authorization Required</h2>
+            <p className="text-xs text-secondary" style={{ marginTop: '8px', lineHeight: 1.6 }}>
+              This operational module is restricted to verified VoiceLock security administrators.
+              Standard operator accounts are granted access exclusively to their personal access overview and voice verification terminal.
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => setActiveTab('overview')}>
+            Return to Overview
+          </Button>
+        </div>
+      );
+    }
+
     switch (activeTab) {
       case 'overview':
         return <OverviewPage onNavigate={(tab) => setActiveTab(tab)} />;

@@ -12,6 +12,8 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { useAuth } from '../../context/useAuth';
+import { createDemoEmailUser } from '../../context/authUtils';
+import { DEMO_SESSION_KEY } from '../../context/authContextDef';
 
 export const SignInPage: React.FC = () => {
   const { signIn, signInWithGoogle, loading, error, isConfigured, clearError } = useAuth();
@@ -65,6 +67,12 @@ export const SignInPage: React.FC = () => {
   };
 
   const handleUseDemoAccount = (demoEmail: string) => {
+    if (import.meta.env.DEV) {
+      const demoUser = createDemoEmailUser(demoEmail);
+      sessionStorage.setItem(DEMO_SESSION_KEY, JSON.stringify(demoUser));
+      window.location.reload();
+      return;
+    }
     setEmail(demoEmail);
     setPassword('VoiceLock2026!');
     clearError();
@@ -147,7 +155,7 @@ export const SignInPage: React.FC = () => {
         </div>
 
         {/* Configuration Notice / Demo Mode Indicator */}
-        {!isConfigured && (
+        {(!isConfigured || import.meta.env.DEV) && (
           <div
             style={{
               padding: '10px 14px',
@@ -177,11 +185,11 @@ export const SignInPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => handleUseDemoAccount('zubair@voicelock.internal')}
+                onClick={() => handleUseDemoAccount('user@voicelock.internal')}
                 className="btn btn-secondary"
                 style={{ fontSize: '11px', padding: '3px 8px' }}
               >
-                Zubair (User)
+                Standard User
               </button>
               <button
                 type="button"

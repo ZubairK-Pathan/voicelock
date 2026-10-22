@@ -31,10 +31,19 @@ function getInitialDemoUser(): AppUser | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const isConfigured = isFirebaseConfigured();
   const [user, setUser] = useState<AppUser | null>(() => {
+    if (import.meta.env.DEV) {
+      const demo = getInitialDemoUser();
+      if (demo) return demo;
+    }
     return !isConfigured ? getInitialDemoUser() : null;
   });
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [loading, setLoading] = useState<boolean>(() => isConfigured);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (import.meta.env.DEV && getInitialDemoUser()) {
+      return false;
+    }
+    return isConfigured;
+  });
   const [error, setError] = useState<string | null>(null);
 
   // Listen to Firebase auth state changes when configured
@@ -44,6 +53,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (import.meta.env.DEV && getInitialDemoUser()) {
+        setLoading(false);
+        return;
+      }
       setFirebaseUser(fbUser);
       if (fbUser) {
         let claims: Record<string, unknown> | undefined;

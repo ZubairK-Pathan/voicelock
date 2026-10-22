@@ -9,9 +9,11 @@ import {
   Activity,
   Sliders,
   UserCheck,
+  User,
 } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 import { useAuth } from '../../context/useAuth';
+import { Badge } from '../ui/Badge';
 
 interface SidebarProps {
   activeTab: NavigationTab;
@@ -32,46 +34,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
+  // Role-Aware Navigation:
+  // Regular operators only see personal overview and voice verification.
+  // Administrative operators see full system and management tabs.
   const navItems = [
     {
       id: 'overview' as NavigationTab,
-      label: 'Overview',
+      label: isAdmin ? 'System Overview' : 'Overview',
       icon: <LayoutDashboard size={18} />,
     },
     {
-      id: 'speakers' as NavigationTab,
-      label: 'Enrolled Speakers',
-      icon: <Users size={18} />,
-      badge: counts.speakers,
+      id: 'verification' as NavigationTab,
+      label: 'Voice Verification',
+      icon: <Mic size={18} />,
     },
     ...(isAdmin
       ? [
+          {
+            id: 'speakers' as NavigationTab,
+            label: 'Enrolled Speakers',
+            icon: <Users size={18} />,
+            badge: counts.speakers,
+          },
           {
             id: 'identities' as NavigationTab,
             label: 'Identity Mappings',
             icon: <UserCheck size={18} />,
             badge: counts.mappings,
           },
+          {
+            id: 'devices' as NavigationTab,
+            label: 'Access Terminals',
+            icon: <Cpu size={18} />,
+            badge: counts.devices,
+          },
+          {
+            id: 'events' as NavigationTab,
+            label: 'Security Audit Log',
+            icon: <ShieldAlert size={18} />,
+            badge: counts.alerts !== undefined && counts.alerts > 0 ? counts.alerts : undefined,
+            badgeColor: '#EF4444',
+          },
         ]
       : []),
-    {
-      id: 'verification' as NavigationTab,
-      label: 'Voice Verification',
-      icon: <Mic size={18} />,
-    },
-    {
-      id: 'devices' as NavigationTab,
-      label: 'Access Terminals',
-      icon: <Cpu size={18} />,
-      badge: counts.devices,
-    },
-    {
-      id: 'events' as NavigationTab,
-      label: 'Security Audit Log',
-      icon: <ShieldAlert size={18} />,
-      badge: counts.alerts !== undefined && counts.alerts > 0 ? counts.alerts : undefined,
-      badgeColor: '#EF4444',
-    },
   ];
 
   return (
@@ -91,10 +96,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
+      {/* Authenticated Operator Identity Card */}
+      {user && (
+        <div
+          style={{
+            padding: '12px 14px',
+            margin: '12px 12px 0 12px',
+            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          }}
+        >
+          <div
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-sm)',
+              background: isAdmin ? 'rgba(59, 130, 246, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <User size={16} color={isAdmin ? '#60A5FA' : '#34D399'} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
+            <div
+              className="text-xs font-semibold text-primary"
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {user.displayName || user.email?.split('@')[0] || 'Operator'}
+            </div>
+            <div style={{ marginTop: '2px' }}>
+              <Badge variant={isAdmin ? 'default' : 'success'}>
+                {isAdmin ? 'SECURITY ADMIN' : 'OPERATOR'}
+              </Badge>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className="sidebar-nav">
         <div className="text-xs font-semibold text-muted" style={{ padding: '8px 14px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Operations & Control
+          {isAdmin ? 'Operations & Control' : 'Access Portal'}
         </div>
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
