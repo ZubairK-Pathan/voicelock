@@ -25,6 +25,11 @@ from app.repositories.verification_event_repository import (
     VerificationEventRepositoryError,
     VerificationEventNotFoundError,
 )
+from app.repositories.security_event_repository import (
+    SecurityEventRepository,
+    SecurityEventRepositoryError,
+    InvalidCursorError,
+)
 
 __all__ = [
     "SpeakerRepository",
@@ -42,5 +47,8 @@ __all__ = [
     "VerificationEventRepository",
     "VerificationEventRepositoryError",
     "VerificationEventNotFoundError",
+    "SecurityEventRepository",
+    "SecurityEventRepositoryError",
+    "InvalidCursorError",
 ]
 

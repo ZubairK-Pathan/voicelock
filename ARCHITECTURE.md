@@ -70,7 +70,15 @@ Voice Recognition/
 │   │   └── rate_limit.py      # In-memory sliding-window limiter & inference concurrency semaphore
 │   ├── schemas/
 │   │   ├── challenge.py       # Pydantic models for challenge request/response
+│   │   ├── mapping.py         # Pydantic models for admin identity mappings
+│   │   ├── security_event.py  # Pydantic models & safe allowlist for security audit events
 │   │   └── verification.py    # Pydantic models for identify, verify, speakers, and health
+│   ├── repositories/
+│   │   ├── speaker_repository.py # Speaker profile CRUD and activation
+│   │   ├── user_speaker_repository.py # 1-to-1 account-to-voiceprint mappings
+│   │   ├── device_repository.py  # Terminal hardware registration & secrets
+│   │   ├── verification_event_repository.py # Biometric verification outcomes
+│   │   └── security_event_repository.py     # Paginated audit log queries & filters
 │   ├── services/
 │   │   ├── speaker_service.py # Singleton management for ECAPA-TDNN model and profiles
 │   │   ├── challenge_service.py # Challenge store singleton and helper wrappers
@@ -79,13 +87,18 @@ Voice Recognition/
 │       ├── __init__.py        # Aggregate api_router
 │       ├── routes_health.py   # GET /
 │       ├── routes_speakers.py # GET /speakers
+│       ├── routes_devices.py  # GET /devices, POST /devices, DELETE /devices
 │       ├── routes_challenges.py # POST /challenge
-│       └── routes_verification.py # POST /identify, POST /verify, WS /ws/identify
+│       ├── routes_verification.py # POST /identify, POST /verify, WS /ws/identify
+│       ├── routes_metrics.py  # GET /metrics, GET /metrics/verification
+│       ├── routes_admin_mappings.py # GET/POST/DELETE /admin/mappings
+│       └── routes_security_events.py # GET /admin/security-events
 └── tests/
-    ├── test_api.py            # 35-test baseline API contract and upload security suite
-    ├── test_auth.py           # 22-test Firebase authentication, RBAC, and WebSocket suite
-    ├── test_auth_policy.py    # 7-test identity separation and policy unit tests
-    └── test_device_auth.py    # 25-test IoT device HMAC, ASGI limiter, CORS, and rate limit suite
+    ├── test_api.py            # Baseline API contract and upload security suite
+    ├── test_auth.py           # Firebase authentication, RBAC, and WebSocket suite
+    ├── test_admin_mappings_api.py # Admin identity mapping test suite
+    ├── test_security_events_api.py # Paginated security audit events API suite
+    └── test_database.py       # SQLAlchemy 2.0 and Alembic migration test suite
 ```
 
 ### Module Responsibilities & Lifecycle Guarantees
