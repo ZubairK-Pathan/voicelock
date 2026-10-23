@@ -1,15 +1,233 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback, useId } from 'react';
 import {
-  Info,
+  ShieldAlert,
+  RefreshCw,
   Lock,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  AlertTriangle,
+  AlertCircle,
   Database,
 } from 'lucide-react';
 import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Alert, AlertTitle, AlertDescription } from '../ui/Alert';
 import { useAuth } from '../../context/useAuth';
+import { apiClient } from '../../lib/apiClient';
+import type { SecurityEventItem, SecurityEventFilters } from '../../types';
+
+function formatTimestamp(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    return d.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+  } catch {
+    return isoString;
+  }
+}
+
+function getSeverityBadgeVariant(severity: string): 'destructive' | 'warning' | 'secondary' | 'default' {
+  switch (severity?.toLowerCase()) {
+    case 'critical':
+    case 'high':
+      return 'destructive';
+    case 'medium':
+      return 'warning';
+    case 'low':
+      return 'secondary';
+    default:
+      return 'default';
+  }
+}
+
+function getStatusBadgeVariant(status: string): 'destructive' | 'warning' | 'success' | 'secondary' | 'default' {
+  switch (status?.toLowerCase()) {
+    case 'blocked':
+      return 'destructive';
+    case 'detected':
+      return 'warning';
+    case 'resolved':
+      return 'success';
+    case 'logged':
+      return 'secondary';
+    default:
+      return 'default';
+  }
+}
 
 export const SecurityEventsPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+
+  // State for events data and network
+  const [events, setEvents] = useState<SecurityEventItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  // Filter state
+  const [eventType, setEventType] = useState<string>('');
+  const [severity, setSeverity] = useState<string>('');
+  const [status, setStatus] = useState<string>('');
+  const [userId, setUserId] = useState<string>('');
+  const [deviceId, setDeviceId] = useState<string>('');
+  const [startTime, setStartTime] = useState<string>('');
+  const [endTime, setEndTime] = useState<string>('');
+
+  // Pagination state (cursor-based)
+  const [currentCursor, setCurrentCursor] = useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState<boolean>(false);
+
+  // Accessible unique IDs for form labels
+  const eventTypeId = useId();
+  const severityId = useId();
+  const statusId = useId();
+  const userIdInputId = useId();
+  const deviceIdInputId = useId();
+  const startTimeId = useId();
+  const endTimeId = useId();
+
+  // Validate date range
+  const isDateRangeInvalid = Boolean(
+    startTime && endTime && new Date(startTime).getTime() > new Date(endTime).getTime()
+  );
+
+  const effectiveIsLoading = isLoading && !isDateRangeInvalid;
+
+  // Active filters count
+  const activeFiltersCount = [
+    eventType,
+    severity,
+    status,
+    userId.trim(),
+    deviceId.trim(),
+    startTime,
+    endTime,
+  ].filter(Boolean).length;
+
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
+
+  const handleFilterChange = (setter: (val: string) => void, val: string) => {
+    setter(val);
+    setCurrentCursor(null);
+    setCursorHistory([]);
+  };
+
+  const handleResetFilters = () => {
+    setEventType('');
+    setSeverity('');
+    setStatus('');
+    setUserId('');
+    setDeviceId('');
+    setStartTime('');
+    setEndTime('');
+    setCurrentCursor(null);
+    setCursorHistory([]);
+  };
+
+  const handleNextPage = () => {
+    if (!hasMore || !nextCursor || effectiveIsLoading) return;
+    setCursorHistory((prev) => [...prev, currentCursor]);
+    setCurrentCursor(nextCursor);
+  };
+
+  const handlePrevPage = () => {
+    if (cursorHistory.length === 0 || effectiveIsLoading) return;
+    const prev = cursorHistory[cursorHistory.length - 1];
+    setCursorHistory((prevList) => prevList.slice(0, -1));
+    setCurrentCursor(prev);
+  };
+
+  // Main data fetching effect
+  useEffect(() => {
+    if (!isAdmin || isDateRangeInvalid) {
+      return;
+    }
+
+    let ignore = false;
+
+    async function fetchEvents() {
+      if (refreshTrigger > 0) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+      setError(null);
+      setErrorStatus(null);
+
+      const filterPayload: SecurityEventFilters = {
+        limit: 50,
+        cursor: currentCursor || undefined,
+        event_type: eventType || undefined,
+        severity: severity || undefined,
+        status: status || undefined,
+        user_id: userId.trim() || undefined,
+        device_id: deviceId.trim() || undefined,
+        start_time: startTime ? new Date(startTime).toISOString() : undefined,
+        end_time: endTime ? new Date(endTime).toISOString() : undefined,
+      };
+
+      try {
+        const response = await apiClient.getSecurityEvents(filterPayload);
+        if (ignore) return;
+
+        if (response.ok && response.data) {
+          setEvents(response.data.events || []);
+          setNextCursor(response.data.next_cursor || null);
+          setHasMore(Boolean(response.data.has_more));
+          setError(null);
+          setErrorStatus(null);
+        } else {
+          setErrorStatus(response.status);
+          if (response.status === 401) {
+            setError('Your operator session has expired or authentication is invalid. Please sign in again.');
+          } else if (response.status === 403) {
+            setError('Administrator authorization required. You do not have permission to inspect the security audit stream.');
+          } else {
+            setError(response.error || 'Failed to retrieve security audit events from server.');
+          }
+          setEvents([]);
+        }
+      } catch {
+        if (!ignore) {
+          setError('Network failure while communicating with the security audit events API.');
+          setEvents([]);
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    }
+
+    fetchEvents();
+
+    return () => {
+      ignore = true;
+    };
+  }, [
+    isAdmin,
+    isDateRangeInvalid,
+    currentCursor,
+    eventType,
+    severity,
+    status,
+    userId,
+    deviceId,
+    startTime,
+    endTime,
+    refreshTrigger,
+  ]);
 
   // Non-admin presentation guard
   if (!isAdmin) {
@@ -53,163 +271,457 @@ export const SecurityEventsPage: React.FC = () => {
     );
   }
 
-  const auditTaxonomy = [
-    {
-      type: 'admin_action',
-      label: 'Administrative Actions',
-      severity: 'low',
-      description: 'Account-to-speaker identity link and unlink operations with actor UID audit bindings.',
-      status: 'Active (Journaled in PostgreSQL)',
-    },
-    {
-      type: 'rate_limit_exceeded',
-      label: 'Rate Limiting Violations',
-      severity: 'medium',
-      description: 'Sliding-window threshold exceedance across verification or challenge endpoints.',
-      status: 'Enforced in Memory',
-    },
-    {
-      type: 'hmac_nonce_replay',
-      label: 'HMAC Nonce Replay Attacks',
-      severity: 'high',
-      description: 'Detected duplicate nonce consumption on physical access terminal requests.',
-      status: 'Enforced in Memory',
-    },
-    {
-      type: 'unauthorized_access',
-      label: 'Unauthorized Speaker Claims',
-      severity: 'high',
-      description: 'Ordinary operators attempting verification against unassigned speaker identities.',
-      status: 'Blocked at Database Layer',
-    },
-    {
-      type: 'payload_too_large',
-      label: 'Upload Size Violations',
-      severity: 'low',
-      description: 'Streaming audio bodies exceeding MAX_AUDIO_SIZE_BYTES (10MB limit).',
-      status: 'Blocked at ASGI Layer',
-    },
-  ];
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Top Banner Notice */}
+      {/* Top Banner & Header */}
       <div
         className="card"
         style={{
-          background: 'rgba(59, 130, 246, 0.08)',
-          borderLeft: '4px solid var(--color-brand)',
-          padding: '16px 20px',
+          padding: '18px 22px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          background: 'rgba(14, 20, 34, 0.65)',
         }}
       >
-        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
-          <Info size={20} color="#60A5FA" style={{ flexShrink: 0, marginTop: '2px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
           <div>
-            <div className="text-sm font-semibold text-primary">
-              Enterprise Security Journal — Ingestion Active
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldAlert size={20} color="#60A5FA" />
+              <h1 className="text-base font-bold text-primary" style={{ margin: 0 }}>
+                Enterprise Security Audit Log API
+              </h1>
+              <Badge variant="default">Audit Stream Active</Badge>
             </div>
-            <p className="text-xs text-secondary" style={{ marginTop: '4px', lineHeight: 1.6 }}>
-              VoiceLock journals security-critical incidents directly to the persistent database table <code className="font-mono text-primary">security_events</code>. All administrative identity links and unlinks from Increment 2A/2B are committed atomically in the same transaction.
+            <p className="text-xs text-secondary" style={{ marginTop: '4px', lineHeight: 1.5 }}>
+              Immutable PostgreSQL journal of authenticated security incidents, rate limiting events, replay attempts, and administrative actions.
             </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={effectiveIsLoading || isRefreshing}
+              aria-label="Refresh security audit log"
+            >
+              <RefreshCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+              {isRefreshing ? 'Refreshing...' : 'Refresh'}
+            </Button>
           </div>
         </div>
       </div>
 
-      {/* Deliberate Unintegrated Status Card */}
+      {/* Date Range Validation Warning */}
+      {isDateRangeInvalid && (
+        <Alert variant="warning">
+          <AlertTitle>
+            <AlertTriangle size={16} /> Invalid Date Range
+          </AlertTitle>
+          <AlertDescription>
+            The selected start date/time cannot be later than the end date/time. Please adjust the filters to resume querying.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Error Alert with Retry */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>
+            <AlertCircle size={16} /> Audit Query Failed {errorStatus ? `(HTTP ${errorStatus})` : ''}
+          </AlertTitle>
+          <AlertDescription style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+            <span>{error}</span>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={effectiveIsLoading || isRefreshing}
+            >
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Filter Controls Card */}
       <div
         className="card"
         style={{
-          padding: '36px 24px',
-          textAlign: 'center',
+          padding: '16px 20px',
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
           gap: '14px',
-          background: 'rgba(14, 20, 34, 0.4)',
-          border: '1px dashed rgba(255, 255, 255, 0.1)',
         }}
       >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Filter size={15} color="#94A3B8" />
+            <span className="text-xs font-semibold text-primary" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Filter Security Telemetry
+            </span>
+            {activeFiltersCount > 0 && (
+              <Badge variant="default">{activeFiltersCount} Active</Badge>
+            )}
+          </div>
+          {activeFiltersCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetFilters}
+              style={{ fontSize: '11px', height: '26px', padding: '0 8px' }}
+            >
+              <RotateCcw size={12} /> Reset Filters
+            </Button>
+          )}
+        </div>
+
+        {/* Filter inputs grid */}
         <div
           style={{
-            width: '48px',
-            height: '48px',
-            borderRadius: '50%',
-            background: 'rgba(59, 130, 246, 0.12)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#60A5FA',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '12px',
           }}
         >
-          <Database size={24} />
-        </div>
-        <div style={{ maxWidth: '540px' }}>
-          <h3 className="text-base font-semibold text-primary">
-            Audit Stream Query API Provisioning in Progress
-          </h3>
-          <p className="text-xs text-secondary" style={{ marginTop: '6px', lineHeight: 1.6 }}>
-            The backend audit repository and database migration are active, but the authenticated read endpoint for streaming and searching <code className="font-mono">security_events</code> is scheduled for Increment 4. Prototype mock events have been retired to preserve enterprise data integrity.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-          <Badge variant="success">DB Table: security_events</Badge>
-          <Badge variant="default">Alembic Migration: Applied</Badge>
-          <Badge variant="secondary">Zero Mock Records</Badge>
+          {/* Event Type Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={eventTypeId} className="text-xs text-muted font-mono">
+              Event Type
+            </label>
+            <select
+              id={eventTypeId}
+              value={eventType}
+              onChange={(e) => handleFilterChange(setEventType, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            >
+              <option value="">All Event Types</option>
+              <option value="admin_action">admin_action</option>
+              <option value="rate_limit_exceeded">rate_limit_exceeded</option>
+              <option value="hmac_nonce_replay">hmac_nonce_replay</option>
+              <option value="unauthorized_speaker_claim">unauthorized_speaker_claim</option>
+              <option value="unauthorized_access">unauthorized_access</option>
+              <option value="payload_too_large">payload_too_large</option>
+            </select>
+          </div>
+
+          {/* Severity Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={severityId} className="text-xs text-muted font-mono">
+              Severity
+            </label>
+            <select
+              id={severityId}
+              value={severity}
+              onChange={(e) => handleFilterChange(setSeverity, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            >
+              <option value="">All Severities</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          {/* Status Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={statusId} className="text-xs text-muted font-mono">
+              Status
+            </label>
+            <select
+              id={statusId}
+              value={status}
+              onChange={(e) => handleFilterChange(setStatus, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            >
+              <option value="">All Statuses</option>
+              <option value="blocked">Blocked</option>
+              <option value="detected">Detected</option>
+              <option value="logged">Logged</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </div>
+
+          {/* Actor UID Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={userIdInputId} className="text-xs text-muted font-mono">
+              Actor UID
+            </label>
+            <input
+              id={userIdInputId}
+              type="text"
+              placeholder="e.g. firebase-uid-..."
+              value={userId}
+              onChange={(e) => handleFilterChange(setUserId, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            />
+          </div>
+
+          {/* Device ID Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={deviceIdInputId} className="text-xs text-muted font-mono">
+              Terminal ID
+            </label>
+            <input
+              id={deviceIdInputId}
+              type="text"
+              placeholder="e.g. terminal-gate-01"
+              value={deviceId}
+              onChange={(e) => handleFilterChange(setDeviceId, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            />
+          </div>
+
+          {/* Start Time Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={startTimeId} className="text-xs text-muted font-mono">
+              Start Date/Time
+            </label>
+            <input
+              id={startTimeId}
+              type="datetime-local"
+              value={startTime}
+              onChange={(e) => handleFilterChange(setStartTime, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            />
+          </div>
+
+          {/* End Time Filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label htmlFor={endTimeId} className="text-xs text-muted font-mono">
+              End Date/Time
+            </label>
+            <input
+              id={endTimeId}
+              type="datetime-local"
+              value={endTime}
+              onChange={(e) => handleFilterChange(setEndTime, e.target.value)}
+              className="search-input"
+              style={{ width: '100%', padding: '6px 10px', height: '34px' }}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Configured Audit Policy Taxonomy Table */}
+      {/* Events Table Card */}
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
-          <h3 className="text-sm font-semibold text-primary" style={{ margin: 0 }}>
-            Configured Audit Event Taxonomy (Database Policy)
-          </h3>
-          <p className="text-xs text-muted" style={{ margin: '2px 0 0 0' }}>
-            Event classifications actively recognized and handled by the VoiceLock security model
-          </p>
-        </div>
         <div className="table-container">
-          <table className="enterprise-table">
+          <table className="enterprise-table" aria-label="Security Audit Events">
             <thead>
               <tr>
-                <th>Event Taxonomy Type</th>
-                <th>Classification</th>
-                <th>Severity</th>
-                <th>Security Boundary & Description</th>
-                <th>Enforcement Layer</th>
+                <th scope="col">Timestamp</th>
+                <th scope="col">Event Type</th>
+                <th scope="col">Severity</th>
+                <th scope="col">Status</th>
+                <th scope="col">Actor UID</th>
+                <th scope="col">Terminal</th>
+                <th scope="col">Request ID</th>
+                <th scope="col">Summary & Telemetry</th>
               </tr>
             </thead>
             <tbody>
-              {auditTaxonomy.map((item) => (
-                <tr key={item.type}>
-                  <td>
-                    <span className="font-mono text-xs font-semibold text-primary">
-                      {item.type}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="text-xs font-semibold text-primary">{item.label}</div>
-                  </td>
-                  <td>
-                    <Badge variant={item.severity === 'high' ? 'destructive' : item.severity === 'medium' ? 'warning' : 'secondary'}>
-                      {item.severity.toUpperCase()}
-                    </Badge>
-                  </td>
-                  <td>
-                    <div className="text-xs text-secondary" style={{ maxWidth: '420px', lineHeight: 1.4 }}>
-                      {item.description}
+              {effectiveIsLoading && events.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                      <RefreshCw size={16} className="animate-spin" /> Querying security audit stream...
                     </div>
                   </td>
-                  <td>
-                    <span className="font-mono text-xs text-muted">
-                      {item.status}
-                    </span>
+                </tr>
+              ) : events.length > 0 ? (
+                events.map((event) => (
+                  <tr key={event.id}>
+                    <td>
+                      <span className="font-mono text-xs text-secondary" style={{ whiteSpace: 'nowrap' }}>
+                        {formatTimestamp(event.created_at)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="font-mono text-xs font-semibold text-primary">
+                        {event.event_type}
+                      </span>
+                    </td>
+                    <td>
+                      <Badge variant={getSeverityBadgeVariant(event.severity)}>
+                        {event.severity?.toUpperCase()}
+                      </Badge>
+                    </td>
+                    <td>
+                      <Badge variant={getStatusBadgeVariant(event.status)}>
+                        {event.status?.toUpperCase()}
+                      </Badge>
+                    </td>
+                    <td>
+                      {event.user_id ? (
+                        <span
+                          className="font-mono text-xs text-primary"
+                          title={event.user_id}
+                          style={{
+                            maxWidth: '120px',
+                            display: 'inline-block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {event.user_id}
+                        </span>
+                      ) : (
+                        <span className="text-muted text-xs">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {event.device_id ? (
+                        <span
+                          className="font-mono text-xs text-primary"
+                          title={event.device_id}
+                          style={{
+                            maxWidth: '120px',
+                            display: 'inline-block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {event.device_id}
+                        </span>
+                      ) : (
+                        <span className="text-muted text-xs">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {event.request_id ? (
+                        <span
+                          className="font-mono text-xs text-muted"
+                          title={event.request_id}
+                          style={{
+                            maxWidth: '100px',
+                            display: 'inline-block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {event.request_id}
+                        </span>
+                      ) : (
+                        <span className="text-muted text-xs">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        <span className="text-xs text-secondary" style={{ lineHeight: 1.4 }}>
+                          {event.details || '—'}
+                        </span>
+                        {event.metadata && Object.keys(event.metadata).length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                            {Object.entries(event.metadata)
+                              .filter(([k]) => {
+                                const lk = k.toLowerCase();
+                                return !lk.includes('secret') && !lk.includes('token') && !lk.includes('password') && !lk.includes('key');
+                              })
+                              .map(([k, v]) => (
+                                <span
+                                  key={k}
+                                  className="font-mono text-xs"
+                                  style={{
+                                    background: 'rgba(255, 255, 255, 0.05)',
+                                    padding: '1px 5px',
+                                    borderRadius: '3px',
+                                    color: 'var(--text-muted)',
+                                    fontSize: '10px',
+                                    border: '1px solid var(--border-subtle)',
+                                  }}
+                                >
+                                  {k}: {String(v)}
+                                </span>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      <Database size={32} color="var(--text-muted)" />
+                      <div className="text-sm font-semibold text-primary">No Security Events Found</div>
+                      <div className="text-xs text-secondary" style={{ maxWidth: '380px' }}>
+                        {activeFiltersCount > 0
+                          ? 'No audit events matched your active filter parameters. Adjust your filters or reset them to query all telemetry.'
+                          : 'No security events are currently recorded in the database.'}
+                      </div>
+                      {activeFiltersCount > 0 && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={handleResetFilters}
+                          style={{ marginTop: '8px' }}
+                        >
+                          <RotateCcw size={13} /> Reset Filter Criteria
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
+        </div>
+
+        {/* Cursor Pagination Controls Footer */}
+        <div
+          style={{
+            padding: '12px 20px',
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            background: 'rgba(14, 20, 34, 0.4)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span className="text-xs text-secondary">
+              Page {cursorHistory.length + 1}
+            </span>
+            <span className="text-xs text-muted">•</span>
+            <span className="text-xs text-secondary">
+              Showing {events.length} event{events.length === 1 ? '' : 's'}
+              {hasMore ? ' (more available)' : ''}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handlePrevPage}
+              disabled={cursorHistory.length === 0 || effectiveIsLoading}
+              aria-label="Previous page of security events"
+            >
+              <ChevronLeft size={14} /> Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleNextPage}
+              disabled={!hasMore || !nextCursor || effectiveIsLoading}
+              aria-label="Next page of security events"
+            >
+              Next <ChevronRight size={14} />
+            </Button>
+          </div>
         </div>
       </div>
     </div>

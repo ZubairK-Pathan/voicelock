@@ -105,6 +105,39 @@ export interface Device {
   total_verifications: number;
 }
 
+export interface SecurityEventItem {
+  id: number;
+  created_at: string;
+  event_type: string;
+  severity: EventSeverity | string;
+  status: 'blocked' | 'detected' | 'logged' | 'resolved' | string;
+  details: string | null;
+  user_id: string | null;
+  device_id: string | null;
+  request_id: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface SecurityEventsResponse {
+  events: SecurityEventItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+  count: number;
+}
+
+export interface SecurityEventFilters {
+  limit?: number;
+  cursor?: string | null;
+  event_type?: string;
+  severity?: EventSeverity | string;
+  status?: string;
+  user_id?: string;
+  device_id?: string;
+  request_id?: string;
+  start_time?: string;
+  end_time?: string;
+}
+
 export interface SecurityEvent {
   id: string;
   timestamp: string;

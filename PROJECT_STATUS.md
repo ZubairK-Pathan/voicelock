@@ -1,21 +1,22 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 23, 2026  
-**Current Milestone:** Increment 4A — Security Audit Events API (Completed)  
+**Last Updated:** October 24, 2026  
+**Current Milestone:** Increment 4B — Integrate the Security Audit Events API (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; production frontend on Azure Static Web Apps `proud-glacier-03b4ad100.3.azurestaticapps.net`; 358 backend tests and 133 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; production frontend on Azure Static Web Apps `proud-glacier-03b4ad100.3.azurestaticapps.net`; 358 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 
 ---
 
 ## 1. Executive Status
-Increment 4A implements the secure, administrator-only, read-only Security Audit Events API (`GET /admin/security-events`) on the VoiceLock Enterprise FastAPI backend:
-1. **Administrative Authorization & RBAC:** Secured strictly with Firebase ID token verification and `get_current_admin` dependency (re-verifying non-revoked session status). Unauthenticated requests return HTTP 401; non-admin users return HTTP 403. Never trusts client-supplied admin flags or query parameters.
-2. **Deterministic Cursor-Based Pagination:** Built a bounded cursor pagination mechanism ordering records by `(created_at DESC, id DESC)`. The integer ID tie-breaker guarantees that multiple events sharing identical timestamps are paginated deterministically with zero dropped or duplicate events across page boundaries. Page size is bounded between 1 and 100 (default 50). Malformed cursors return HTTP 400.
-3. **Database-Level Filtering:** Implemented efficient SQL query filtering across indexed model fields: `event_type`, `severity`, `status`, `user_id`, `device_id`, `request_id`, and time window `[start_time, end_time)`. Invalid date ranges (`start_time > end_time`) or invalid event types reject with HTTP 400.
-4. **Strict Data Privacy & Metadata Allowlist:** Excluded passwords, bearer tokens, HMAC keys, private keys, raw audio paths, and 192-d biometric embeddings from response schemas. Operational metadata is filtered against an explicit allowlist (`SAFE_AUDIT_METADATA_ALLOWLIST`), dropping any non-allowlisted keys or token-like values.
-5. **Database Safety & Invariance:** Queries are bounded and read-only. Database errors fail safely returning generic HTTP 500 without leaking connection strings or stack traces.
-6. **Automated Testing:** Added 24 comprehensive tests in `tests/test_security_events_api.py`, bringing total backend test suite to 358 tests (all passing).
+Increment 4B integrates the real, administrator-only Security Audit Events API (`GET /admin/security-events`) into the VoiceLock Enterprise frontend:
+1. **Security Audit Log Replacement:** Replaced the unintegrated placeholder in `SecurityEventsPage.tsx` with a production-ready, accessible audit log viewer consistent with VoiceLock's design tokens and UI components.
+2. **Typed API Client:** Added `apiClient.getSecurityEvents(filters)` in `frontend/src/lib/apiClient.ts` with typed query parameters (`limit`, `cursor`, `event_type`, `severity`, `status`, `user_id`, `device_id`, `request_id`, `start_time`, `end_time`), automatic Bearer token injection, single 401 token refresh retry, and safe error parsing.
+3. **Cursor-Based Pagination & History:** Implemented forward and backward pagination backed by the server's opaque continuation cursor (`next_cursor`, `has_more`). Maintained a client-side cursor history stack for previous-page traversal, with automatic cursor reset upon filter changes and button disabling to prevent duplicate in-flight requests.
+4. **Server-Side Filtering & Validation:** Provided intuitive UI filters for event taxonomy, severity level, lifecycle status, actor UID, hardware terminal ID, and datetime range. Enforced client-side date range validation (`start_time <= end_time`) before query submission.
+5. **State Handling & Role Guarding:** Enforced verified administrator presentation boundary with immediate rejection of non-admin sessions. Supported distinct loading skeletons, empty result states, manual on-demand refresh without polling storms, 401 session expiry alerts, and 5xx transient error banners with retry capability.
+6. **Data Privacy & Zero-Mock Invariant:** Filtered event metadata strictly to eliminate any sensitive keys (tokens, secrets, credentials, passwords). Displayed only real response fields without fabricated database totals or mock data.
+7. **Automated Testing:** Added 15 comprehensive automated tests in `frontend/src/lib/securityAuditEvents.test.ts`, expanding the frontend test suite to 148 tests (all 148 passing). Zero lint warnings/errors in oxlint; clean production build via Vite/tsc.
 
 ---
 
@@ -999,16 +1000,42 @@ Increment 4A implements the secure, administrator-only, read-only Security Audit
 - **Targeted Automated Tests (`tests/test_security_events_api.py`):**
   - Added 24 comprehensive tests covering auth (401/403/200), cursor pagination, tie-breaking, multi-page iteration, limits, filtering, date range validation, metadata allowlisting, privacy exclusions, safe 500 handling, and read-only invariance.
 
+### Increment 4B: Integrate the Security Audit Events API (Completed)
+- **Frontend Audit Log Integration:**
+  - Replaced the unintegrated placeholder in `frontend/src/components/pages/SecurityEventsPage.tsx` with a production-grade, accessible audit viewer connected to live `GET /admin/security-events`.
+  - Displayed verified safe response fields: ISO timestamp, monospace event type, color-coded severity badges (`destructive` for critical/high, `warning` for medium, `secondary` for low), lifecycle status badges (`destructive` for blocked, `warning` for detected, `secondary` for logged, `success` for resolved), actor UID, hardware terminal ID, request ID, and sanitized telemetry details.
+  - Rendered allowlisted safe metadata as monospace pills, strictly filtering out any key names or values containing tokens, secrets, private keys, or credentials.
+- **Typed API Client:**
+  - Added `apiClient.getSecurityEvents(filters)` in `frontend/src/lib/apiClient.ts` with strict TypeScript types (`SecurityEventItem`, `SecurityEventsResponse`, `SecurityEventFilters`).
+  - Implemented safe query string construction via `URLSearchParams`, automatically omitting unset or empty filter values.
+  - Preserved established authentication mechanisms: Firebase ID token acquisition, Bearer header injection, single 401 token refresh retry on GET queries, and no retries on 403 or mutations.
+- **Cursor-Based Pagination & Stack History:**
+  - Backed by the backend's opaque base64 continuation cursor (`next_cursor`, `has_more`).
+  - Supported bidirectional traversal via client-side cursor history stack (`cursorHistory`).
+  - Automatically resets cursor history to initial page upon any filter modification or filter reset.
+  - Prevented duplicate in-flight requests by disabling Next/Previous buttons and indicators while loading.
+  - Zero fabricated page totals or assumed record counts across the database.
+- **Filtering Controls & Date Range Validation:**
+  - Provided interactive controls for event taxonomy, severity level, lifecycle status, actor UID, terminal ID, and datetime range (`[start_time, end_time]`).
+  - Enforced client-side date validation preventing query dispatch if `start_time > end_time` with an accessible warning alert.
+  - Provided a one-click "Reset Filters" action and live active-filters count badge.
+- **Comprehensive State Architecture:**
+  - Handled distinct UI states: initial query loading skeleton, empty results with guidance, manual on-demand refresh without background polling loops, 401 session expiration, 403 administrator role rejection, and 5xx transient error banners with retry action.
+- **Automated Testing Suite (`frontend/src/lib/securityAuditEvents.test.ts`):**
+  - Added 15 comprehensive automated tests covering query parameter formatting, omitted filters, Bearer auth, 401 recovery, 403 safety, 5xx handling, admin view guard, zero-mock invariant, date range validation, cursor pagination navigation, duplicate request prevention, safe field rendering, and metadata privacy.
+  - Total frontend test suite expanded to 148 tests (all passing).
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Frontend Security Audit Suite (Inc 4B)** | `npm test --prefix frontend` (including `securityAuditEvents.test.ts`) | 0 | **15/15 tests PASSED** (API query formatting, unset filter omission, Bearer auth, 401 recovery, 403 rejection, 5xx safety, admin guard, zero-mock invariant, date range validation, cursor pagination stack, duplicate prevention, safe fields & metadata privacy) |
+| **Full Frontend Test Suite** | `npm test --prefix frontend` | 0 | **148/148 tests PASSED in 463ms** (21 suites passing) |
+| **Frontend Code Quality** | `npm run lint --prefix frontend` | 0 | **0 warnings, 0 errors** across 42 files |
+| **Frontend Production Build** | `npm run build --prefix frontend` | 0 | **Build passed in 103ms** (`dist/index.html`, `dist/assets/index-BliEn-5Z.js`, `dist/assets/index-M54cu_1s.css`) |
 | **Security Audit Events API Suite** | `.venv/bin/pytest tests/test_security_events_api.py -v` | 0 | **24/24 tests PASSED in 0.79s** (Admin RBAC, 401/403 guards, default/custom/max limit bounds, deterministic cursor pagination, identical timestamp tie-breaker, multi-page traversal without duplicates, filters [event_type, severity, status, user_id, time window], invalid date rejection, metadata allowlist sanitization, sensitive key exclusion, safe 500 DB error, read-only invariance) |
 | **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **358/358 tests PASSED in 14.75s** (All baseline and incremental test suites passing) |
-| **Frontend Unit & Integration Suite** | `npm test --prefix frontend` | 0 | **133/133 tests PASSED in 439ms** (19 suites passing) |
-| **Frontend Code Quality** | `npm run lint --prefix frontend` | 0 | **0 warnings, 0 errors** across 41 files |
-| **Frontend Production Build** | `npm run build --prefix frontend` | 0 | **Build passed in 117ms** (`dist/index.html`, `dist/assets/index-DfN9ZScM.js`, `dist/assets/index-M54cu_1s.css`) |
 | **Admin Mappings API Suite** | `.venv/bin/pytest tests/test_admin_mappings_api.py -v` | 0 | **16/16 tests PASSED in 1.20s** (List mappings, unmapped speakers, link success, audit trail, 401/403 guards, 409 duplicate UID/speaker conflicts, 400 inactive speaker, 404 missing speaker/mapping, embedding preservation on unlink, atomic audit rollback, data minimization) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
@@ -1031,8 +1058,8 @@ Increment 4A implements the secure, administrator-only, read-only Security Audit
 ---
 
 ## 4. Known Issues & Remaining Security Risks
-1. **Security Event Route Instrumentation & Frontend Streaming (Current Scope):**
-   - *Status:* `SecurityEvent` schema, `SecurityEventRepository`, and administrator query API (`GET /admin/security-events`) with cursor-based pagination and filtering are fully implemented and verified in Increment 4A. Automatic incident instrumentation on all API routes and frontend Audit Log table integration remain to be wired in subsequent increments.
+1. **Security Event Route Instrumentation:**
+   - *Status:* Security event models, database migrations, repository, administrator query API (`GET /admin/security-events`), and frontend Audit Log viewer are fully implemented and verified in Increments 4A and 4B. Automatic incident instrumentation across remaining uninstrumented routes remains to be expanded.
 2. **Frontend Development Demonstration Mode:**
    - *Status:* When `frontend/.env.local` is not populated with real Firebase Web credentials, client operates in local demonstration mode with preset operator accounts. Real Firebase ID tokens require provisioning in the Firebase Console.
 3. **In-Memory Store & Rate Limiter Single-Process Boundary (`SEC-006`):**

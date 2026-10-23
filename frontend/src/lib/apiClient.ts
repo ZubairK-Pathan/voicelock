@@ -18,6 +18,8 @@ import type {
   MappingsListResponse,
   UnmappedSpeakersResponse,
   MappingOperationResponse,
+  SecurityEventsResponse,
+  SecurityEventFilters,
 } from '../types';
 import { auth, isFirebaseConfigured } from './firebase.ts';
 
@@ -418,6 +420,52 @@ export class ApiClient {
     options?: RequestInit & { requiresAuth?: boolean }
   ): Promise<ApiResponse<MappingOperationResponse>> {
     return this.delete<MappingOperationResponse>(`/admin/mappings/${mappingId}`, options);
+  }
+
+  /**
+   * Fetch paginated security audit events with deterministic cursor pagination and filtering.
+   * Requires verified administrator session (RBAC).
+   */
+  public getSecurityEvents(
+    filters?: SecurityEventFilters,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ): Promise<ApiResponse<SecurityEventsResponse>> {
+    const params = new URLSearchParams();
+    if (filters) {
+      if (filters.limit !== undefined && filters.limit !== null) {
+        params.append('limit', String(filters.limit));
+      }
+      if (filters.cursor) {
+        params.append('cursor', filters.cursor);
+      }
+      if (filters.event_type) {
+        params.append('event_type', filters.event_type);
+      }
+      if (filters.severity) {
+        params.append('severity', filters.severity);
+      }
+      if (filters.status) {
+        params.append('status', filters.status);
+      }
+      if (filters.user_id) {
+        params.append('user_id', filters.user_id);
+      }
+      if (filters.device_id) {
+        params.append('device_id', filters.device_id);
+      }
+      if (filters.request_id) {
+        params.append('request_id', filters.request_id);
+      }
+      if (filters.start_time) {
+        params.append('start_time', filters.start_time);
+      }
+      if (filters.end_time) {
+        params.append('end_time', filters.end_time);
+      }
+    }
+    const query = params.toString();
+    const endpoint = query ? `/admin/security-events?${query}` : '/admin/security-events';
+    return this.get<SecurityEventsResponse>(endpoint, options);
   }
 }
 
