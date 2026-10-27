@@ -3,7 +3,7 @@
 **Last Updated:** October 28, 2026  
 **Current Milestone:** Hardware Terminal Phase — Milestone 2: ESP32-S3 Wi-Fi, SNTP & Secure Azure Backend Connectivity (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 378 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 380 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
@@ -1029,9 +1029,9 @@ Milestone 2 establishes secure, authenticated embedded networking between the ES
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Firmware Contract Suite (M2)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **4/4 tests PASSED in 0.82s** (Wire body digest equality, Scheme A canonical HMAC signing, SNTP clock drift >300s rejection, DigiCert Global Root G2 certificate validation) |
-| **ESP32-S3 Firmware Compilation (M2)** | `pio run -d firmware` | 0 | **Build SUCCESS in 1.24s** (RAM: 15.6% [51.0 KB / 327.7 KB], Flash: 37.2% [1.24 MB / 3.34 MB]) |
-| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **378/378 tests PASSED in 15.88s** (All baseline, security, device provisioning, and firmware contract test suites passing) |
+| **Firmware Contract Suite (M2)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **6/6 tests PASSED in 1.30s** (Wire body digest equality, Scheme A canonical HMAC signing, SNTP clock drift >300s rejection, DigiCert Global Root G2 certificate validation, live TLS 1.3 Azure handshake, state machine security invariants) |
+| **ESP32-S3 Firmware Compilation (M2)** | `pio run -d firmware` | 0 | **Build SUCCESS in 6.42s** (RAM: 15.6% [51.0 KB / 327.7 KB], Flash: 37.2% [1.24 MB / 3.34 MB]) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **380/380 tests PASSED in 17.45s** (All baseline, security, device provisioning, and firmware contract test suites passing) |
 | **Device Integration Suite (M1)** | `.venv/bin/pytest tests/test_device_integration.py -v` | 0 | **6/6 tests PASSED in 3.12s** (Full end-to-end simulated verification flow, Scheme A HMAC canonical signing, Scheme B pre-shared key, challenge acquisition, spoken WAV synthesis, STT liveness verification, ECAPA-TDNN scoring) |
 | **Device Provisioning CLI Suite (M1)** | `.venv/bin/pytest tests/test_device_provisioning.py -v` | 0 | **10/10 tests PASSED in 0.95s** (CSPRNG secret generation, sha256$ salted verifiers, remote database protection, credentials.h C/C++ export with 0600 permissions, key rotation) |
 | **Frontend Security Audit Suite (Inc 4B)** | `npm test --prefix frontend` (including `securityAuditEvents.test.ts`) | 0 | **15/15 tests PASSED** (API query formatting, unset filter omission, Bearer auth, 401 recovery, 403 rejection, 5xx safety, admin guard, zero-mock invariant, date range validation, cursor pagination stack, duplicate prevention, safe fields & metadata privacy) |

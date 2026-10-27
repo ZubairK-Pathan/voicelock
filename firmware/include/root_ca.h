@@ -1,8 +1,27 @@
-#pragma once
-
-// DigiCert Global Root G2 (Root Certificate Authority for *.azurecontainerapps.io)
+// ============================================================================
+// VoiceLock Enterprise — Azure Container Apps Root Trust Anchor
+//
 // Subject: C=US, O=DigiCert Inc, OU=www.digicert.com, CN=DigiCert Global Root G2
-// Valid until: Jan 15 12:00:00 2038 GMT
+// Issuer:  Self-signed Root Certificate Authority
+// SHA-1 Fingerprint: df3c24f9bfd666761b268073fe06d1cc8d4f82a4
+// Validity: Aug 01 12:00:00 2013 GMT through Jan 15 12:00:00 2038 GMT
+//
+// Trust Chain for *.azurecontainerapps.io:
+//   Leaf:         *.orangesand-9922d50e.eastasia.azurecontainerapps.io
+//   Intermediate: Microsoft TLS G2 RSA CA OCSP 04
+//   Intermediate: Microsoft TLS RSA Root G2
+//   Root CA:      DigiCert Global Root G2 (this certificate)
+//
+// Certificate Update & Rotation Strategy:
+// 1. ESP32 embedded mbedTLS requires hardcoded or filesystem-backed CA certificates
+//    because microcontrollers do not maintain dynamic operating system trust stores.
+// 2. This root certificate anchors Microsoft Azure's RSA TLS PKI through January 2038.
+// 3. In the event of CA sunset, revocation, or migration to Microsoft RSA Root CA 2017:
+//    a. Update this header file with the new PEM root certificate.
+//    b. Deploy firmware via Over-The-Air (OTA) update partition or USB programming.
+//    c. Verification must be confirmed against the live Azure host before field deployment.
+// ============================================================================
+
 static const char* AZURE_ROOT_CA_CERT = 
 "-----BEGIN CERTIFICATE-----\n"
 "MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\n"

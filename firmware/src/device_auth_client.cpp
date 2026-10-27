@@ -46,9 +46,24 @@ ChallengeResult requestLivenessChallenge(
         return res;
     }
 
-    // 1. Build JSON request body
+    // 1. Validate claimed identity formatting (strict alphanumeric, _, -)
+    const char* ident = (claimedIdentity && strlen(claimedIdentity) > 0) ? claimedIdentity : "Zubair";
+    size_t identLen = strlen(ident);
+    if (identLen > 32) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "claimed_identity too long (>32 chars)");
+        return res;
+    }
+    for (size_t i = 0; i < identLen; i++) {
+        char c = ident[i];
+        if (!isalnum(c) && c != '_' && c != '-') {
+            snprintf(res.errorMessage, sizeof(res.errorMessage), "Invalid claimed_identity characters");
+            return res;
+        }
+    }
+
+    // 2. Build JSON request body
     char body[128];
-    snprintf(body, sizeof(body), "{\"claimed_identity\":\"%s\"}", claimedIdentity ? claimedIdentity : "Zubair");
+    snprintf(body, sizeof(body), "{\"claimed_identity\":\"%s\"}", ident);
     size_t bodyLen = strlen(body);
 
     // 2. Compute SHA256 hex digest of wire body
@@ -67,7 +82,9 @@ ChallengeResult requestLivenessChallenge(
 
     // 4. Generate 16-hex CSPRNG nonce
     char nonceStr[32];
-    snprintf(nonceStr, sizeof(nonceStr), "%08x%08x", esp_random(), esp_random());
+    snprintf(nonceStr, sizeof(nonceStr), "%08lx%08lx", 
+             static_cast<unsigned long>(esp_random()), 
+             static_cast<unsigned long>(esp_random()));
 
     // 5. Construct canonical string: METHOD\nPATH\nTIMESTAMP\nNONCE\nBODY_SHA256
     char canonical[256];
@@ -146,8 +163,17 @@ ChallengeResult requestLivenessChallenge(
     const char* disp = doc["display"];
     if (disp) {
         strncpy(res.display, disp, sizeof(res.display) - 1);
+        res.display[sizeof(res.display) - 1] = '\0';
     } else {
-        snprintf(res.display, sizeof(res.display), "%c  %c  %c", res.digits[0], res.digits[1], res.digits[2]);
+        int pos = 0;
+        for (int i = 0; i < dIdx && pos < (int)sizeof(res.display) - 2; i++) {
+            res.display[pos++] = res.digits[i];
+            if (i < dIdx - 1 && pos < (int)sizeof(res.display) - 2) {
+                res.display[pos++] = ' ';
+                res.display[pos++] = ' ';
+            }
+        }
+        res.display[pos] = '\0';
     }
 
     res.expiresInSeconds = doc["expires_in_seconds"] | 60;

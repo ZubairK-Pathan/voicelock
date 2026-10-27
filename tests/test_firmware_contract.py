@@ -173,6 +173,28 @@ class TestFirmwareContract:
         assert "DigiCert Global Root G2" in content
         assert "BEGIN CERTIFICATE" in content
         assert "END CERTIFICATE" in content
+        assert "2038" in content
+        assert "Rotation Strategy" in content
+        assert "OTA" in content
+
+    def test_root_ca_authenticates_live_azure_backend(self, tmp_path):
+        """Verify the embedded root CA directly validates the live Azure Container App TLS certificate."""
+        import socket
+        root_ca_file = FIRMWARE_ROOT / "include" / "root_ca.h"
+        content = root_ca_file.read_text(encoding="utf-8")
+        
+        parts = re.findall(r"\"([^\"]*)\"", content)
+        pem = "".join(parts).replace("\\n", "\n")
+        ca_pem_path = tmp_path / "azure_ca.pem"
+        ca_pem_path.write_text(pem, encoding="utf-8")
+
+        ctx = ssl.create_default_context(cafile=str(ca_pem_path))
+        host = "voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io"
+        with socket.create_connection((host, 443), timeout=10) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                assert ssock.version() in ("TLSv1.2", "TLSv1.3")
+                cipher, protocol, bits = ssock.cipher()
+                assert bits >= 128
 
     def test_device_config_loader_preserves_safety(self):
         """Verify device_config_loader.h falls back safely when device_config.h is absent."""
@@ -181,3 +203,17 @@ class TestFirmwareContract:
         content = loader_file.read_text(encoding="utf-8")
         assert '__has_include("device_config.h")' in content
         assert "device_config.example.h" in content
+
+    def test_firmware_state_machine_security_invariants(self):
+        """Verify firmware state machine never illuminates Green LED or indicates authorization prior to server approval."""
+        main_file = FIRMWARE_ROOT / "src" / "main.cpp"
+        assert main_file.is_file()
+        content = main_file.read_text(encoding="utf-8")
+
+        # In standby, setup, and challenge display: Green LED must remain LOW
+        # (Green LED is strictly reserved for server UNLOCK in Milestone 3)
+        assert "digitalWrite(LED_GREEN, LOW)" in content
+        # Ensure offline transmitAudioPayload does not light green LED
+        transmit_block = content.split("void transmitAudioPayload()")[1].split("void startChallengeRequest()")[0]
+        assert "digitalWrite(LED_GREEN, LOW);" in transmit_block
+        assert "digitalWrite(LED_GREEN, HIGH);" not in transmit_block

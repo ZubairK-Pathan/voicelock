@@ -370,9 +370,9 @@ void transmitAudioPayload() {
     Serial.print("AUDIO_END\n");
     Serial.flush();
 
-    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
-    successTone();
+    beep(1800, 60);
 
     setState(STATE_COMPLETE);
     setState(STATE_READY);
@@ -409,9 +409,11 @@ void startChallengeRequest() {
     );
 
     if (activeChallenge.success) {
-        digitalWrite(LED_GREEN, HIGH);
+        // Neutral prompt indication: digits received and displayed on OLED screen.
+        // Green LED is strictly prohibited from illuminating until server authorization (Milestone 3).
+        digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, LOW);
-        successTone();
+        beep(2000, 40);
 
         Serial.printf("CHALLENGE_RECEIVED:{\"id\":\"%s\",\"digits\":\"%s\",\"display\":\"%s\"}\n",
                       activeChallenge.challengeId, activeChallenge.digits, activeChallenge.display);
@@ -517,17 +519,18 @@ void setup() {
     bool wifiOk = initWifi(8000, showScreen);
     if (wifiOk) {
         syncNtpTime(5000, showScreen);
-        digitalWrite(LED_GREEN, HIGH);
+        digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, LOW);
-        successTone();
+        beep(1800, 60);
     } else {
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
         beep(800, 100);
         delay(1500);
+        digitalWrite(LED_RED, LOW);
     }
 
-    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
     setState(STATE_READY);
     Serial.print("READY\n");
@@ -560,8 +563,11 @@ void loop() {
     }
 
     switch (state) {
-        case STATE_CHALLENGE_DISPLAY:
-            if (millis() - stateEnteredAt >= 6000) {
+        case STATE_CHALLENGE_DISPLAY: {
+            uint32_t displayDurationMs = (activeChallenge.expiresInSeconds > 0)
+                ? min((uint32_t)(activeChallenge.expiresInSeconds * 1000), (uint32_t)25000)
+                : 20000;
+            if (millis() - stateEnteredAt >= displayDurationMs) {
                 setState(STATE_READY);
                 Serial.print("READY\n");
                 Serial.flush();
@@ -570,6 +576,7 @@ void loop() {
                 updateDisplay();
             }
             break;
+        }
 
         case STATE_RECORDING:
             captureStep();
@@ -585,7 +592,7 @@ void loop() {
 
         case STATE_CANCELLED:
             if (millis() - stateEnteredAt >= 1500) {
-                digitalWrite(LED_GREEN, HIGH);
+                digitalWrite(LED_GREEN, LOW);
                 digitalWrite(LED_RED, LOW);
                 setState(STATE_READY);
                 Serial.print("READY\n");
