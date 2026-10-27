@@ -1,21 +1,21 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 28, 2026  
-**Current Milestone:** Hardware Terminal Phase — Milestone 2: ESP32-S3 Wi-Fi, SNTP & Secure Azure Backend Connectivity (Completed)  
+**Current Milestone:** Hardware Terminal Phase — Milestone 3: End-to-End ESP32 Audio Verification & Access Grant (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 380 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 387 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Milestone 2 establishes secure, authenticated embedded networking between the ESP32-S3 hardware terminal and the live Azure Container Apps backend:
-1. **ESP32-S3 Wi-Fi Connection & Recovery (`firmware/src/wifi_manager.cpp`, `firmware/include/wifi_manager.h`):** Bounded 8s non-blocking station mode connection with visual OLED status messaging, background reconnection maintenance (`maintainWifi()`), and safe offline fallback returning the device to `STATE_READY`.
-2. **SNTP Real-Time Clock Synchronization:** Implemented SNTP client synchronization via `pool.ntp.org` to provide accurate POSIX epoch time required by mbedTLS for X.509 certificate validity interval checks and HMAC-SHA256 timestamp tolerance compliance (300s window).
-3. **Hardware-Accelerated Canonical HMAC-SHA256 Signing (`firmware/src/device_auth_client.cpp`):** Full client-side implementation of Scheme A device authentication using mbedTLS. Computes wire-body SHA-256 digest, 64-bit CSPRNG hex nonce (`esp_random()`), formats canonical string `f"{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}"`, and signs via `mbedtls_md_hmac(MBEDTLS_MD_SHA256)`.
-4. **Strict TLS 1.3 Certificate Verification (`firmware/include/root_ca.h`):** Embedded official DigiCert Global Root G2 PEM certificate anchoring `*.azurecontainerapps.io`. Enforces strict certificate chain verification via `WiFiClientSecure::setCACert()`. Insecure TLS modes and `setInsecure()` are strictly prohibited.
-5. **Secure Challenge Acquisition & High-Contrast OLED Display:** Dispatches HTTPS `POST /challenge` with standard device authentication headers (`X-Device-Id`, `X-Device-Timestamp`, `X-Device-Nonce`, `X-Device-Signature`), parses response safely via `ArduinoJson`, and renders 4-digit spoken challenges prominently on the SH1106 OLED display using `u8g2_font_logisoso16_tr`.
-6. **Local-Only Secret Hygiene:** Implemented `device_config.example.h` and conditional loader `device_config_loader.h`. `device_config.h` is excluded via `.gitignore`, preventing sensitive Wi-Fi credentials and device pre-shared keys from entering source control.
-7. **Automated Host-Side Contract & Compilation Verification:** Added 4 automated tests in `tests/test_firmware_contract.py` validating wire body digest equality, HMAC canonical signing, SNTP clock drift enforcement (>300s rejection), and Root CA certificate presence (all 4 passed). PlatformIO ESP32-S3 compilation succeeded with 0 errors (Flash: 37.2%, RAM: 15.6%). Total backend test suite expanded to 378 tests (100% passing).
+Milestone 3 establishes complete, secure, end-to-end hardware-to-cloud audio verification between the ESP32-S3 terminal and the VoiceLock Azure backend:
+1. **Interactive Verification Initiation & Spoken Challenge Flow:** User presses physical START button (`GPIO16`). Terminal requests a fresh liveness challenge via HTTPS `POST /challenge`, extracts `challenge_id` and `session_id`, and displays the challenge digits on the SH1106 OLED display.
+2. **Deterministic PCM Capture & Standard WAV Header Construction (`firmware/src/device_auth_client.cpp`):** Captures 5 seconds of 16 kHz mono 16-bit PCM audio (160,000 bytes) from the ICS-43434 microphone. Prepends a standard 44-byte RIFF/WAVE header formatted with exact byte rate (32,000 B/s), block align (2), and PCM format tag (1). Decodable cleanly by standard audio libraries (`wave`, `soundfile`, `ffmpeg`).
+3. **Bounded-Memory Streaming SHA-256 & Scheme A Multipart Signing:** Formats multipart/form-data body with fields `claimed_identity`, `challenge_id`, `session_id`, and `audio` (`capture.wav`). Computes wire-body SHA-256 digest using incremental `mbedtls_sha256_update` streaming across framing, WAV header, and PCM buffer without allocating a second 160 KB buffer. Signs canonical string `POST\n/verify\n{ts}\n{nonce}\n{body_sha256}` via HMAC-SHA256 (`mbedtls_md_hmac`).
+4. **Chunked HTTPS Upload over TLS 1.3:** Connects via `WiFiClientSecure` anchored to DigiCert Global Root G2 certificate (`root_ca.h`). Streams multipart payload to `POST /verify` in 4096-byte chunks.
+5. **Strict Server-Side Authorization Invariant & LED Isolation:** Parses HTTP status and JSON response (`accepted`, `action`, `similarity`, `liveness_passed`). Firmware sets `isUnlock = true` **strictly and only if** `httpCode == 200 && accepted == true && action == "UNLOCK"`. Green LED (`GPIO17`) is illuminated **only** on confirmed server authorization. Rejections (`action == "DENY"`), liveness failures, malformed JSON, HTTP errors (400, 401, 403, 413, 500), TLS timeouts, and manual cancellations (`GPIO15`) keep the Green LED strictly OFF and display distinct visual feedback.
+6. **Cancellation & Recovery:** Physical CANCEL button (`GPIO15`) aborts challenge requesting, countdown display, active audio capture, or upload, resetting state cleanly to `STATE_READY`.
+7. **Comprehensive Test Suite & Firmware Compilation:** Added 7 new contract and security tests to `tests/test_firmware_contract.py` (total 13/13 passing in 2.11s), verifying WAV header structure, multipart framing, Scheme A HMAC validation, server UNLOCK/DENY decisions, replayed challenge rejection, and malformed response safety. PlatformIO ESP32-S3 compilation succeeded with 0 warnings and 0 errors (Flash: 37.5%, RAM: 15.7%). Backend test suite expanded to 387 tests (100% passing).
 
 ---
 
@@ -1029,9 +1029,9 @@ Milestone 2 establishes secure, authenticated embedded networking between the ES
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Firmware Contract Suite (M2)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **6/6 tests PASSED in 1.30s** (Wire body digest equality, Scheme A canonical HMAC signing, SNTP clock drift >300s rejection, DigiCert Global Root G2 certificate validation, live TLS 1.3 Azure handshake, state machine security invariants) |
-| **ESP32-S3 Firmware Compilation (M2)** | `pio run -d firmware` | 0 | **Build SUCCESS in 6.42s** (RAM: 15.6% [51.0 KB / 327.7 KB], Flash: 37.2% [1.24 MB / 3.34 MB]) |
-| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **380/380 tests PASSED in 17.45s** (All baseline, security, device provisioning, and firmware contract test suites passing) |
+| **Firmware Contract & E2E Suite (M3)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **13/13 tests PASSED in 2.11s** (WAV header exact byte structure, 16kHz mono 16-bit PCM decodability, Scheme A multipart construction, raw wire SHA-256 digest equality, valid backend UNLOCK decision, explicit biometric DENY decision, failed liveness challenge rejection, expired challenge 400 rejection, firmware parsing decision logic, 401 tampered body/signature rejection, SNTP clock drift rejection, Root CA verification, state machine green LED isolation) |
+| **ESP32-S3 Firmware Compilation (M3)** | `pio run -d firmware` | 0 | **Build SUCCESS in 1.26s** (RAM: 15.7% [51.4 KB / 327.7 KB], Flash: 37.5% [1.25 MB / 3.34 MB]) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **387/387 tests PASSED in 16.89s** (All baseline, security, device provisioning, verification route audit, and firmware contract test suites passing) |
 | **Device Integration Suite (M1)** | `.venv/bin/pytest tests/test_device_integration.py -v` | 0 | **6/6 tests PASSED in 3.12s** (Full end-to-end simulated verification flow, Scheme A HMAC canonical signing, Scheme B pre-shared key, challenge acquisition, spoken WAV synthesis, STT liveness verification, ECAPA-TDNN scoring) |
 | **Device Provisioning CLI Suite (M1)** | `.venv/bin/pytest tests/test_device_provisioning.py -v` | 0 | **10/10 tests PASSED in 0.95s** (CSPRNG secret generation, sha256$ salted verifiers, remote database protection, credentials.h C/C++ export with 0600 permissions, key rotation) |
 | **Frontend Security Audit Suite (Inc 4B)** | `npm test --prefix frontend` (including `securityAuditEvents.test.ts`) | 0 | **15/15 tests PASSED** (API query formatting, unset filter omission, Bearer auth, 401 recovery, 403 rejection, 5xx safety, admin guard, zero-mock invariant, date range validation, cursor pagination stack, duplicate prevention, safe fields & metadata privacy) |
@@ -1079,11 +1079,11 @@ Milestone 2 establishes secure, authenticated embedded networking between the ES
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Hardware Terminal Phase — Milestone 3: End-to-End Terminal Audio Verification & Access Grant**:
-1. Implement multipart/form-data streaming WAV audio upload (`POST /verify`) from ESP32-S3.
-2. Stream audio buffers recorded from ICS-43434 I2S microphone directly over HTTPS to Azure backend.
-3. Compute and attach Scheme A HMAC-SHA256 signature over multipart payload.
-4. Parse biometric verification response (`action: "UNLOCK" | "DENY"`) and actuate status LEDs, buzzer tones, and OLED outcome screen.
+Proceed to **Hardware Terminal Physical Field Validation**:
+1. Flash firmware to physical ESP32-S3 DevKitM-1 terminal using local PlatformIO upload (`pio run -t upload`).
+2. Verify Wi-Fi association and SNTP time synchronization against live gateway.
+3. Test end-to-end spoken digit verification with enrolled speaker (`Zubair`): confirm Green LED illuminates upon backend UNLOCK decision.
+4. Test impostor voice or incorrect digits: confirm Red LED illuminates, Green LED remains completely dark, and OLED reports explicit denial reason.
 
 
 

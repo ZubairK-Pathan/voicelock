@@ -59,8 +59,11 @@ int32_t dcPrevX = 0;
 int32_t dcPrevY = 0;
 int activeChannelOffset = 0; // 0 = Left (even index), 1 = Right (odd index)
 
-// Challenge state
+// Challenge & Verification states
 ChallengeResult activeChallenge = {};
+VerifyResult activeVerifyResult = {};
+bool isVerificationFlow = false;
+uint32_t resultDisplayHoldMs = 2500;
 
 // ==================== STATE MACHINE ====================
 
@@ -70,6 +73,8 @@ enum DeviceState {
     STATE_CHALLENGE_REQUESTING,
     STATE_CHALLENGE_DISPLAY,
     STATE_RECORDING,
+    STATE_UPLOADING,
+    STATE_RESULT,
     STATE_TRANSMITTING,
     STATE_COMPLETE,
     STATE_CANCELLED,
@@ -127,7 +132,7 @@ void showScreen(const char* title, const char* line1, const char* line2) {
     display.sendBuffer();
 }
 
-void showChallengeScreen(const char* displayDigits, uint32_t remainingSecs) {
+void showChallengeScreen(const char* displayDigits) {
     if (!oledReady) return;
 
     display.clearBuffer();
@@ -136,16 +141,72 @@ void showChallengeScreen(const char* displayDigits, uint32_t remainingSecs) {
     display.drawHLine(0, 12, 128);
 
     display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 24, "Speak Digits Clearly:");
+    display.drawStr(0, 24, "Get Ready to Speak:");
 
-    // Prominent digit font
     display.setFont(u8g2_font_logisoso16_tr);
-    display.drawStr(24, 46, displayDigits ? displayDigits : "---");
+    display.drawStr(20, 46, displayDigits ? displayDigits : "---");
 
     display.setFont(u8g2_font_6x12_tf);
-    char expBuf[32];
-    snprintf(expBuf, sizeof(expBuf), "Expires in: %lu s", (unsigned long)remainingSecs);
-    display.drawStr(0, 60, expBuf);
+    display.drawStr(0, 60, "Recording starting...");
+    display.sendBuffer();
+}
+
+void showRecordingScreen(const char* displayDigits, uint32_t currentSamples, uint32_t totalSamples) {
+    if (!oledReady) return;
+
+    display.clearBuffer();
+    display.setFont(u8g2_font_6x12_tf);
+    display.drawStr(0, 10, "SPEAK DIGITS CLEARLY");
+    display.drawHLine(0, 12, 128);
+
+    display.setFont(u8g2_font_logisoso16_tr);
+    display.drawStr(20, 36, displayDigits ? displayDigits : "---");
+
+    uint32_t pct = (totalSamples > 0) ? (currentSamples * 100) / totalSamples : 0;
+    if (pct > 100) pct = 100;
+    display.drawFrame(14, 44, 100, 8);
+    display.drawBox(14, 44, pct, 8);
+
+    char progressStr[32];
+    snprintf(progressStr, sizeof(progressStr), "Recording: %lu%%", (unsigned long)pct);
+    display.setFont(u8g2_font_6x12_tf);
+    display.drawStr(24, 62, progressStr);
+    display.sendBuffer();
+}
+
+void showResultScreen(const VerifyResult& res) {
+    if (!oledReady) return;
+
+    display.clearBuffer();
+    display.setFont(u8g2_font_6x12_tf);
+    display.drawStr(0, 10, "VOICELOCK VERIFICATION");
+    display.drawHLine(0, 12, 128);
+
+    if (res.isUnlock) {
+        display.setFont(u8g2_font_ncenB08_tr);
+        display.drawStr(0, 28, "ACCESS GRANTED");
+        display.setFont(u8g2_font_6x12_tf);
+        char sBuf[80];
+        snprintf(sBuf, sizeof(sBuf), "User: %s", res.claimedIdentity);
+        display.drawStr(0, 44, sBuf);
+        char scoreBuf[32];
+        snprintf(scoreBuf, sizeof(scoreBuf), "Similarity: %.4f", res.similarity);
+        display.drawStr(0, 59, scoreBuf);
+    } else if (res.httpCode == 200) {
+        display.setFont(u8g2_font_ncenB08_tr);
+        display.drawStr(0, 28, "ACCESS DENIED");
+        display.setFont(u8g2_font_6x12_tf);
+        display.drawStr(0, 44, res.livenessPassed ? "Biometric Mismatch" : "Liveness Failed");
+        display.drawStr(0, 59, res.reason[0] ? res.reason : "Verification Denied");
+    } else {
+        display.setFont(u8g2_font_ncenB08_tr);
+        display.drawStr(0, 28, "SERVER ERROR");
+        display.setFont(u8g2_font_6x12_tf);
+        char hBuf[32];
+        snprintf(hBuf, sizeof(hBuf), "HTTP Status: %d", res.httpCode);
+        display.drawStr(0, 44, hBuf);
+        display.drawStr(0, 59, res.errorMessage[0] ? res.errorMessage : "Verification Failed");
+    }
     display.sendBuffer();
 }
 
@@ -160,7 +221,7 @@ void updateDisplay() {
         case STATE_READY:
             if (isWifiConnected()) {
                 String ip = getWifiStatusString();
-                showScreen("Ready (Connected)", "Press START: Challenge", ip.c_str());
+                showScreen("Ready (Connected)", "Press START: Verify", ip.c_str());
             } else {
                 showScreen("Ready (Offline)", "Press START: Capture", "Serial mode active");
             }
@@ -170,20 +231,27 @@ void updateDisplay() {
             showScreen("Requesting...", "Contacting Azure", "POST /challenge");
             break;
 
-        case STATE_CHALLENGE_DISPLAY: {
-            uint32_t elapsedSecs = (millis() - stateEnteredAt) / 1000;
-            uint32_t remaining = (activeChallenge.expiresInSeconds > elapsedSecs) 
-                ? (activeChallenge.expiresInSeconds - elapsedSecs) : 0;
-            showChallengeScreen(activeChallenge.display, remaining);
+        case STATE_CHALLENGE_DISPLAY:
+            showChallengeScreen(activeChallenge.display);
             break;
-        }
 
-        case STATE_RECORDING: {
-            uint32_t pct = (samplesCaptured * 100) / TOTAL_SAMPLES;
-            snprintf(line2Buf, sizeof(line2Buf), "Captured: %lu%%", (unsigned long)pct);
-            showScreen("Recording 5s", "Speak clearly now", line2Buf);
+        case STATE_RECORDING:
+            if (isVerificationFlow) {
+                showRecordingScreen(activeChallenge.display, samplesCaptured, TOTAL_SAMPLES);
+            } else {
+                uint32_t pct = (samplesCaptured * 100) / TOTAL_SAMPLES;
+                snprintf(line2Buf, sizeof(line2Buf), "Captured: %lu%%", (unsigned long)pct);
+                showScreen("Recording 5s", "Speak clearly now", line2Buf);
+            }
             break;
-        }
+
+        case STATE_UPLOADING:
+            showScreen("Verifying", "Uploading audio...", "POST /verify");
+            break;
+
+        case STATE_RESULT:
+            showResultScreen(activeVerifyResult);
+            break;
 
         case STATE_TRANSMITTING:
             showScreen("Sending PCM", "160,000 bytes", "Do not unplug USB");
@@ -281,7 +349,7 @@ inline int16_t convertI2SSlotToPcm16(int32_t rawSlot32) {
 
 // ==================== RECORDING & PROTOCOL FLOW ====================
 
-void beginRecording() {
+void beginRecording(bool forVerification = false) {
     if (state == STATE_ERROR || pcmBuffer == nullptr || !microphoneReady) {
         return;
     }
@@ -295,6 +363,7 @@ void beginRecording() {
         }
     }
 
+    isVerificationFlow = forVerification;
     samplesCaptured = 0;
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
@@ -307,7 +376,7 @@ void beginRecording() {
 }
 
 void cancelAction() {
-    if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING) {
+    if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING) {
         samplesCaptured = 0;
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
@@ -320,8 +389,58 @@ void cancelAction() {
     }
 }
 
+void dispatchVerificationUpload() {
+    setState(STATE_UPLOADING);
+    Serial.print("UPLOADING_VERIFICATION\n");
+    Serial.flush();
+
+    activeVerifyResult = uploadAudioVerification(
+        VOICELOCK_BACKEND_HOST,
+        VOICELOCK_BACKEND_PORT,
+        DEVICE_ID,
+        DEVICE_SECRET,
+        DEFAULT_CLAIMED_IDENTITY,
+        activeChallenge.challengeId,
+        activeChallenge.sessionId,
+        pcmBuffer,
+        PCM_BYTES,
+        15000
+    );
+
+    if (activeVerifyResult.isUnlock) {
+        // Explicit backend authorization: activate green LED and chime
+        digitalWrite(LED_GREEN, HIGH);
+        digitalWrite(LED_RED, LOW);
+        successTone();
+        resultDisplayHoldMs = 3500;
+        Serial.printf("VERIFY_GRANTED:{\"identity\":\"%s\",\"similarity\":%.4f}\n",
+                      activeVerifyResult.claimedIdentity, activeVerifyResult.similarity);
+    } else if (activeVerifyResult.httpCode == 200) {
+        // Explicit biometric denial or liveness failure: red LED and error tone
+        digitalWrite(LED_GREEN, LOW);
+        digitalWrite(LED_RED, HIGH);
+        errorTone();
+        resultDisplayHoldMs = 2500;
+        Serial.printf("VERIFY_DENIED:{\"liveness\":%s,\"similarity\":%.4f,\"reason\":\"%s\"}\n",
+                      activeVerifyResult.livenessPassed ? "true" : "false",
+                      activeVerifyResult.similarity,
+                      activeVerifyResult.reason);
+    } else {
+        // HTTP or network error: red LED and error tone, green LED strictly OFF
+        digitalWrite(LED_GREEN, LOW);
+        digitalWrite(LED_RED, HIGH);
+        errorTone();
+        resultDisplayHoldMs = 2500;
+        Serial.printf("VERIFY_ERROR:{\"http\":%d,\"error\":\"%s\"}\n",
+                      activeVerifyResult.httpCode, activeVerifyResult.errorMessage);
+    }
+    Serial.flush();
+    setState(STATE_RESULT);
+}
+
 void captureStep() {
     if (millis() - stateEnteredAt > CAPTURE_TIMEOUT_MS) {
+        digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
         errorTone();
         Serial.print("ERROR_I2S_TIMEOUT\n");
@@ -331,7 +450,11 @@ void captureStep() {
 
     size_t remaining = TOTAL_SAMPLES - samplesCaptured;
     if (remaining == 0) {
-        setState(STATE_TRANSMITTING);
+        if (isVerificationFlow) {
+            dispatchVerificationUpload();
+        } else {
+            setState(STATE_TRANSMITTING);
+        }
         return;
     }
 
@@ -347,7 +470,11 @@ void captureStep() {
     }
 
     if (samplesCaptured >= TOTAL_SAMPLES) {
-        setState(STATE_TRANSMITTING);
+        if (isVerificationFlow) {
+            dispatchVerificationUpload();
+        } else {
+            setState(STATE_TRANSMITTING);
+        }
     }
 }
 
@@ -409,14 +536,12 @@ void startChallengeRequest() {
     );
 
     if (activeChallenge.success) {
-        // Neutral prompt indication: digits received and displayed on OLED screen.
-        // Green LED is strictly prohibited from illuminating until server authorization (Milestone 3).
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, LOW);
         beep(2000, 40);
 
-        Serial.printf("CHALLENGE_RECEIVED:{\"id\":\"%s\",\"digits\":\"%s\",\"display\":\"%s\"}\n",
-                      activeChallenge.challengeId, activeChallenge.digits, activeChallenge.display);
+        Serial.printf("CHALLENGE_RECEIVED:{\"id\":\"%s\",\"session\":\"%s\",\"digits\":\"%s\",\"display\":\"%s\"}\n",
+                      activeChallenge.challengeId, activeChallenge.sessionId, activeChallenge.digits, activeChallenge.display);
         Serial.flush();
 
         setState(STATE_CHALLENGE_DISPLAY);
@@ -447,11 +572,11 @@ void pollButtons() {
         previousStart = startNow;
         if (startNow == LOW && (now - lastButtonChange >= DEBOUNCE_MS)) {
             lastButtonChange = now;
-            if (state == STATE_READY || state == STATE_CANCELLED || state == STATE_COMPLETE) {
+            if (state == STATE_READY || state == STATE_CANCELLED || state == STATE_COMPLETE || state == STATE_RESULT) {
                 if (isWifiConnected()) {
                     startChallengeRequest();
                 } else {
-                    beginRecording();
+                    beginRecording(false);
                 }
             }
         }
@@ -461,7 +586,9 @@ void pollButtons() {
         previousCancel = cancelNow;
         if (cancelNow == LOW && (now - lastButtonChange >= DEBOUNCE_MS)) {
             lastButtonChange = now;
-            cancelAction();
+            if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING) {
+                cancelAction();
+            }
         }
     }
 }
@@ -553,9 +680,9 @@ void loop() {
         while (Serial.available() > 0) {
             char c = static_cast<char>(Serial.read());
             if (c == 'R') {
-                beginRecording();
+                beginRecording(false);
                 break;
-            } else if (c == 'C') {
+            } else if (c == 'C' || c == 'V') {
                 startChallengeRequest();
                 break;
             }
@@ -563,26 +690,35 @@ void loop() {
     }
 
     switch (state) {
-        case STATE_CHALLENGE_DISPLAY: {
-            uint32_t displayDurationMs = (activeChallenge.expiresInSeconds > 0)
-                ? min((uint32_t)(activeChallenge.expiresInSeconds * 1000), (uint32_t)25000)
-                : 20000;
-            if (millis() - stateEnteredAt >= displayDurationMs) {
-                setState(STATE_READY);
-                Serial.print("READY\n");
-                Serial.flush();
-            } else if (millis() - lastDisplayUpdate >= 500) {
+        case STATE_CHALLENGE_DISPLAY:
+            // Allow 1.5 seconds for user to glance at digits, then begin recording
+            if (millis() - stateEnteredAt >= 1500) {
+                beginRecording(true);
+            } else if (millis() - lastDisplayUpdate >= 250) {
                 lastDisplayUpdate = millis();
                 updateDisplay();
             }
             break;
-        }
 
         case STATE_RECORDING:
             captureStep();
             if (millis() - lastDisplayUpdate >= 250) {
                 lastDisplayUpdate = millis();
                 updateDisplay();
+            }
+            break;
+
+        case STATE_UPLOADING:
+            // Handled during dispatchVerificationUpload
+            break;
+
+        case STATE_RESULT:
+            if (millis() - stateEnteredAt >= resultDisplayHoldMs) {
+                digitalWrite(LED_GREEN, LOW);
+                digitalWrite(LED_RED, LOW);
+                setState(STATE_READY);
+                Serial.print("READY\n");
+                Serial.flush();
             }
             break;
 
