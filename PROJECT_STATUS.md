@@ -1,19 +1,21 @@
 # Project Status — VoiceLock Enterprise
 
 **Last Updated:** October 28, 2026  
-**Current Milestone:** Hardware Terminal Phase — Milestone 1: Secure Device Provisioning & Host Verification (Completed)  
+**Current Milestone:** Hardware Terminal Phase — Milestone 2: ESP32-S3 Wi-Fi, SNTP & Secure Azure Backend Connectivity (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 374 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 378 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Milestone 1 completes the secure device provisioning infrastructure and host-simulated hardware terminal verification flow:
-1. **Device Provisioning Infrastructure (`scripts/register_device.py`):** Created a secure CLI for terminal provisioning and credential rotation. Generates 256-bit cryptographically secure secrets via CSPRNG (`secrets.token_urlsafe(32)`), stores only `sha256$<hex>` salted verifiers in the database (`DeviceRecord`), and prevents remote database writes without explicit authorization (`--allow-remote`). Supports C/C++ header export (`credentials.h` with `0600` permissions) ignored by Git.
-2. **Streaming ASGI Body Preservation:** Enhanced `RequestSizeLimiterMiddleware` (`app/core/middleware.py`) and `get_current_device` (`app/core/device_auth.py`) to buffer and preserve raw wire bytes in the ASGI scope, resolving Starlette's `RuntimeError("Stream consumed")` on multipart `/verify` requests and ensuring seamless HMAC-SHA256 signature verification over multipart payloads.
-3. **Host-Side Verification Contract Simulator (`scripts/test_device_verification.py`):** Built end-to-end simulation executing Scheme A (HMAC-SHA256 canonical signing) and Scheme B (`X-Device-Key`). Obtains cryptographic liveness challenges from `POST /challenge`, synthesizes 16 kHz mono WAV audio speaking the returned challenge digits via native speech synthesis, submits to `POST /verify`, and verifies offline Vosk STT liveness verification (`liveness_passed=True`) and SpeechBrain ECAPA-TDNN biometric similarity scoring.
-4. **Anti-Spoofing & Replay Validation:** Validated that mismatched audio (`microphone_test.wav`) fails liveness (`liveness_passed=False`), replayed challenge IDs are burned upon first use, and all verification events are durably recorded in the database `verification_events` table with `verification_flow="device"`.
-5. **Automated Test Coverage:** Added 10 tests in `tests/test_device_provisioning.py` and 6 integration tests in `tests/test_device_integration.py`. Total test suite expanded to 374 tests (all 374 passing with 0 failures). ML models (SpeechBrain ECAPA-TDNN, Vosk STT) and baseline metrics preserved with 100% accuracy on evaluation.
+Milestone 2 establishes secure, authenticated embedded networking between the ESP32-S3 hardware terminal and the live Azure Container Apps backend:
+1. **ESP32-S3 Wi-Fi Connection & Recovery (`firmware/src/wifi_manager.cpp`, `firmware/include/wifi_manager.h`):** Bounded 8s non-blocking station mode connection with visual OLED status messaging, background reconnection maintenance (`maintainWifi()`), and safe offline fallback returning the device to `STATE_READY`.
+2. **SNTP Real-Time Clock Synchronization:** Implemented SNTP client synchronization via `pool.ntp.org` to provide accurate POSIX epoch time required by mbedTLS for X.509 certificate validity interval checks and HMAC-SHA256 timestamp tolerance compliance (300s window).
+3. **Hardware-Accelerated Canonical HMAC-SHA256 Signing (`firmware/src/device_auth_client.cpp`):** Full client-side implementation of Scheme A device authentication using mbedTLS. Computes wire-body SHA-256 digest, 64-bit CSPRNG hex nonce (`esp_random()`), formats canonical string `f"{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}"`, and signs via `mbedtls_md_hmac(MBEDTLS_MD_SHA256)`.
+4. **Strict TLS 1.3 Certificate Verification (`firmware/include/root_ca.h`):** Embedded official DigiCert Global Root G2 PEM certificate anchoring `*.azurecontainerapps.io`. Enforces strict certificate chain verification via `WiFiClientSecure::setCACert()`. Insecure TLS modes and `setInsecure()` are strictly prohibited.
+5. **Secure Challenge Acquisition & High-Contrast OLED Display:** Dispatches HTTPS `POST /challenge` with standard device authentication headers (`X-Device-Id`, `X-Device-Timestamp`, `X-Device-Nonce`, `X-Device-Signature`), parses response safely via `ArduinoJson`, and renders 4-digit spoken challenges prominently on the SH1106 OLED display using `u8g2_font_logisoso16_tr`.
+6. **Local-Only Secret Hygiene:** Implemented `device_config.example.h` and conditional loader `device_config_loader.h`. `device_config.h` is excluded via `.gitignore`, preventing sensitive Wi-Fi credentials and device pre-shared keys from entering source control.
+7. **Automated Host-Side Contract & Compilation Verification:** Added 4 automated tests in `tests/test_firmware_contract.py` validating wire body digest equality, HMAC canonical signing, SNTP clock drift enforcement (>300s rejection), and Root CA certificate presence (all 4 passed). PlatformIO ESP32-S3 compilation succeeded with 0 errors (Flash: 37.2%, RAM: 15.6%). Total backend test suite expanded to 378 tests (100% passing).
 
 ---
 
@@ -1027,12 +1029,16 @@ Milestone 1 completes the secure device provisioning infrastructure and host-sim
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
+| **Firmware Contract Suite (M2)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **4/4 tests PASSED in 0.82s** (Wire body digest equality, Scheme A canonical HMAC signing, SNTP clock drift >300s rejection, DigiCert Global Root G2 certificate validation) |
+| **ESP32-S3 Firmware Compilation (M2)** | `pio run -d firmware` | 0 | **Build SUCCESS in 1.24s** (RAM: 15.6% [51.0 KB / 327.7 KB], Flash: 37.2% [1.24 MB / 3.34 MB]) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **378/378 tests PASSED in 15.88s** (All baseline, security, device provisioning, and firmware contract test suites passing) |
+| **Device Integration Suite (M1)** | `.venv/bin/pytest tests/test_device_integration.py -v` | 0 | **6/6 tests PASSED in 3.12s** (Full end-to-end simulated verification flow, Scheme A HMAC canonical signing, Scheme B pre-shared key, challenge acquisition, spoken WAV synthesis, STT liveness verification, ECAPA-TDNN scoring) |
+| **Device Provisioning CLI Suite (M1)** | `.venv/bin/pytest tests/test_device_provisioning.py -v` | 0 | **10/10 tests PASSED in 0.95s** (CSPRNG secret generation, sha256$ salted verifiers, remote database protection, credentials.h C/C++ export with 0600 permissions, key rotation) |
 | **Frontend Security Audit Suite (Inc 4B)** | `npm test --prefix frontend` (including `securityAuditEvents.test.ts`) | 0 | **15/15 tests PASSED** (API query formatting, unset filter omission, Bearer auth, 401 recovery, 403 rejection, 5xx safety, admin guard, zero-mock invariant, date range validation, cursor pagination stack, duplicate prevention, safe fields & metadata privacy) |
 | **Full Frontend Test Suite** | `npm test --prefix frontend` | 0 | **148/148 tests PASSED in 463ms** (21 suites passing) |
 | **Frontend Code Quality** | `npm run lint --prefix frontend` | 0 | **0 warnings, 0 errors** across 42 files |
 | **Frontend Production Build** | `npm run build --prefix frontend` | 0 | **Build passed in 103ms** (`dist/index.html`, `dist/assets/index-BliEn-5Z.js`, `dist/assets/index-M54cu_1s.css`) |
 | **Security Audit Events API Suite** | `.venv/bin/pytest tests/test_security_events_api.py -v` | 0 | **24/24 tests PASSED in 0.79s** (Admin RBAC, 401/403 guards, default/custom/max limit bounds, deterministic cursor pagination, identical timestamp tie-breaker, multi-page traversal without duplicates, filters [event_type, severity, status, user_id, time window], invalid date rejection, metadata allowlist sanitization, sensitive key exclusion, safe 500 DB error, read-only invariance) |
-| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **358/358 tests PASSED in 14.75s** (All baseline and incremental test suites passing) |
 | **Admin Mappings API Suite** | `.venv/bin/pytest tests/test_admin_mappings_api.py -v` | 0 | **16/16 tests PASSED in 1.20s** (List mappings, unmapped speakers, link success, audit trail, 401/403 guards, 409 duplicate UID/speaker conflicts, 400 inactive speaker, 404 missing speaker/mapping, embedding preservation on unlink, atomic audit rollback, data minimization) |
 | **Neon Database Suite** | `.venv/bin/pytest tests/test_neon_database.py -v` | 0 | **6/6 tests PASSED in 8.77s** (Live TLS PostgreSQL connection, dialect normalization, password masking, unpooled migration prioritization, 7 migrations chain, live repository queries) |
 | **Metrics API Suite** | `.venv/bin/pytest tests/test_metrics_api.py -v` | 0 | **14/14 tests PASSED in 1.07s** (Admin access, 401/403 safety, device rejection, empty DB zeros, mixed outcomes & denominator, zero biometric div-zero guard, time window [start, end), invalid window 400, flow filter, invalid flow 400, data minimization, sanitized 500) |
@@ -1063,7 +1069,7 @@ Milestone 1 completes the secure device provisioning infrastructure and host-sim
    - *Risk:* `InMemoryChallengeStore`, `InMemoryNonceStore`, and `InMemoryRateLimiter` are process-local. Running Uvicorn with `--workers > 1` causes state divergence.
    - *Plan:* Replace with persistent storage (PostgreSQL/Redis) in Milestone 3C.4 (Shared Challenge & Rate Limit Storage).
 4. **Pre-Shared Device Key Replay Limitation (`SEC-001` partial):**
-   - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and recommended for production terminals.
+   - *Status:* Constrained microcontrollers using Scheme B (`X-Device-Key`) lack application-layer replay resistance. Scheme A (HMAC-SHA256 with nonce and timestamp) is implemented and verified on the ESP32-S3 terminal.
 5. **Small Evaluation Dataset & Threshold Discordance (`SEC-009`):**
    - *Risk:* 0.00% EER is computed on only 3 speakers (27 test samples). Max impostor score of 0.6802 exceeds baseline threshold of 0.25.
    - *Plan:* Retain 0.25 for prototype compatibility; conduct comprehensive multi-session biometric evaluation before production.
@@ -1073,10 +1079,11 @@ Milestone 1 completes the secure device provisioning infrastructure and host-sim
 ---
 
 ## 5. Next Recommended Step
-Proceed to **Increment 4C: Cloud CI/CD Automation (GitHub Actions to GHCR & Azure Deployment)**:
-1. Create `.github/workflows/deploy.yml` to automatically build, test, and push the backend container image to GitHub Container Registry (`ghcr.io`).
-2. Configure Azure Container Apps secret references for `DATABASE_URL` and Firebase credentials.
-3. Configure Azure Static Web Apps deployment for the React frontend.
+Proceed to **Hardware Terminal Phase — Milestone 3: End-to-End Terminal Audio Verification & Access Grant**:
+1. Implement multipart/form-data streaming WAV audio upload (`POST /verify`) from ESP32-S3.
+2. Stream audio buffers recorded from ICS-43434 I2S microphone directly over HTTPS to Azure backend.
+3. Compute and attach Scheme A HMAC-SHA256 signature over multipart payload.
+4. Parse biometric verification response (`action: "UNLOCK" | "DENY"`) and actuate status LEDs, buzzer tones, and OLED outcome screen.
 
 
 

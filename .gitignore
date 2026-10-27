@@ -60,8 +60,15 @@ fine_tuned_model/
 firebase-credentials.json
 credentials.h
 device_credentials*.json
+device_config.h
+firmware/include/device_config.h
 *.key
 *.pem
 .env
 .env.*
 !.env.example
+
+# Embedded Firmware Build
+.pio/
+firmware/.pio/
+
