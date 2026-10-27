@@ -1,22 +1,19 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 24, 2026  
-**Current Milestone:** Increment 4B — Integrate the Security Audit Events API (Completed)  
+**Last Updated:** October 28, 2026  
+**Current Milestone:** Hardware Terminal Phase — Milestone 1: Secure Device Provisioning & Host Verification (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` active on Azure Container Apps in `eastasia`; production frontend on Azure Static Web Apps `proud-glacier-03b4ad100.3.azurestaticapps.net`; 358 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
-
+**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 374 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
 ## 1. Executive Status
-Increment 4B integrates the real, administrator-only Security Audit Events API (`GET /admin/security-events`) into the VoiceLock Enterprise frontend:
-1. **Security Audit Log Replacement:** Replaced the unintegrated placeholder in `SecurityEventsPage.tsx` with a production-ready, accessible audit log viewer consistent with VoiceLock's design tokens and UI components.
-2. **Typed API Client:** Added `apiClient.getSecurityEvents(filters)` in `frontend/src/lib/apiClient.ts` with typed query parameters (`limit`, `cursor`, `event_type`, `severity`, `status`, `user_id`, `device_id`, `request_id`, `start_time`, `end_time`), automatic Bearer token injection, single 401 token refresh retry, and safe error parsing.
-3. **Cursor-Based Pagination & History:** Implemented forward and backward pagination backed by the server's opaque continuation cursor (`next_cursor`, `has_more`). Maintained a client-side cursor history stack for previous-page traversal, with automatic cursor reset upon filter changes and button disabling to prevent duplicate in-flight requests.
-4. **Server-Side Filtering & Validation:** Provided intuitive UI filters for event taxonomy, severity level, lifecycle status, actor UID, hardware terminal ID, and datetime range. Enforced client-side date range validation (`start_time <= end_time`) before query submission.
-5. **State Handling & Role Guarding:** Enforced verified administrator presentation boundary with immediate rejection of non-admin sessions. Supported distinct loading skeletons, empty result states, manual on-demand refresh without polling storms, 401 session expiry alerts, and 5xx transient error banners with retry capability.
-6. **Data Privacy & Zero-Mock Invariant:** Filtered event metadata strictly to eliminate any sensitive keys (tokens, secrets, credentials, passwords). Displayed only real response fields without fabricated database totals or mock data.
-7. **Automated Testing:** Added 15 comprehensive automated tests in `frontend/src/lib/securityAuditEvents.test.ts`, expanding the frontend test suite to 148 tests (all 148 passing). Zero lint warnings/errors in oxlint; clean production build via Vite/tsc.
+Milestone 1 completes the secure device provisioning infrastructure and host-simulated hardware terminal verification flow:
+1. **Device Provisioning Infrastructure (`scripts/register_device.py`):** Created a secure CLI for terminal provisioning and credential rotation. Generates 256-bit cryptographically secure secrets via CSPRNG (`secrets.token_urlsafe(32)`), stores only `sha256$<hex>` salted verifiers in the database (`DeviceRecord`), and prevents remote database writes without explicit authorization (`--allow-remote`). Supports C/C++ header export (`credentials.h` with `0600` permissions) ignored by Git.
+2. **Streaming ASGI Body Preservation:** Enhanced `RequestSizeLimiterMiddleware` (`app/core/middleware.py`) and `get_current_device` (`app/core/device_auth.py`) to buffer and preserve raw wire bytes in the ASGI scope, resolving Starlette's `RuntimeError("Stream consumed")` on multipart `/verify` requests and ensuring seamless HMAC-SHA256 signature verification over multipart payloads.
+3. **Host-Side Verification Contract Simulator (`scripts/test_device_verification.py`):** Built end-to-end simulation executing Scheme A (HMAC-SHA256 canonical signing) and Scheme B (`X-Device-Key`). Obtains cryptographic liveness challenges from `POST /challenge`, synthesizes 16 kHz mono WAV audio speaking the returned challenge digits via native speech synthesis, submits to `POST /verify`, and verifies offline Vosk STT liveness verification (`liveness_passed=True`) and SpeechBrain ECAPA-TDNN biometric similarity scoring.
+4. **Anti-Spoofing & Replay Validation:** Validated that mismatched audio (`microphone_test.wav`) fails liveness (`liveness_passed=False`), replayed challenge IDs are burned upon first use, and all verification events are durably recorded in the database `verification_events` table with `verification_flow="device"`.
+5. **Automated Test Coverage:** Added 10 tests in `tests/test_device_provisioning.py` and 6 integration tests in `tests/test_device_integration.py`. Total test suite expanded to 374 tests (all 374 passing with 0 failures). ML models (SpeechBrain ECAPA-TDNN, Vosk STT) and baseline metrics preserved with 100% accuracy on evaluation.
 
 ---
 

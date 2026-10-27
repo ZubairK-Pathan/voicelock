@@ -331,7 +331,12 @@ async def get_current_device(
                 )
 
         # Read raw request body hash
-        raw_body = await request.body()
+        raw_body = request.scope.get("_raw_body")
+        if raw_body is None:
+            if hasattr(request, "_body"):
+                raw_body = request._body
+            else:
+                raw_body = await request.body()
         body_digest = hashlib.sha256(raw_body).hexdigest()
 
         # Build canonical signing string

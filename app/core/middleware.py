@@ -78,8 +78,10 @@ class RequestSizeLimiterMiddleware:
                 pass  # Malformed Content-Length; fallback to streaming inspection
 
         # 2. Raw Stream Limiter: Wrap ASGI receive to count incoming chunks on-the-fly
+        # and preserve the wire body in ASGI scope for cryptographic HMAC authentication.
         received_bytes = 0
         response_started = False
+        body_chunks = []
 
         async def tracking_send(message):
             nonlocal response_started
@@ -95,6 +97,9 @@ class RequestSizeLimiterMiddleware:
                 received_bytes += len(chunk)
                 if received_bytes > max_bytes:
                     raise PayloadTooLargeError(max_bytes)
+                body_chunks.append(chunk)
+                if not message.get("more_body", False):
+                    scope["_raw_body"] = b"".join(body_chunks)
             return message
 
         try:

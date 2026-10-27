@@ -58,6 +58,8 @@ fine_tuned_model/
 
 # Secrets & Credentials
 firebase-credentials.json
+credentials.h
+device_credentials*.json
 *.key
 *.pem
 .env
