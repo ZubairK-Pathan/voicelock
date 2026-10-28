@@ -87,44 +87,20 @@ export const SignInPage: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'radial-gradient(ellipse at 50% 20%, rgba(29, 78, 216, 0.15) 0%, #080C14 70%)',
+        background: 'var(--bg-app)',
         padding: '24px',
         position: 'relative',
         overflow: 'hidden',
       }}
     >
-      {/* Background Decorative Rings */}
-      <div
-        style={{
-          position: 'absolute',
-          width: '600px',
-          height: '600px',
-          borderRadius: '50%',
-          border: '1px solid rgba(59, 130, 246, 0.08)',
-          pointerEvents: 'none',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          width: '900px',
-          height: '900px',
-          borderRadius: '50%',
-          border: '1px solid rgba(59, 130, 246, 0.04)',
-          pointerEvents: 'none',
-        }}
-      />
-
       <div
         style={{
           maxWidth: '440px',
           width: '100%',
-          background: 'rgba(14, 20, 34, 0.85)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-medium)',
           borderRadius: 'var(--radius-lg)',
-          boxShadow: '0 20px 50px -10px rgba(0, 0, 0, 0.7), 0 0 25px rgba(59, 130, 246, 0.15)',
+          boxShadow: 'var(--shadow-elevated)',
           padding: '36px 32px',
           zIndex: 10,
         }}
@@ -136,12 +112,12 @@ export const SignInPage: React.FC = () => {
               width: '48px',
               height: '48px',
               borderRadius: 'var(--radius-md)',
-              background: 'linear-gradient(135deg, #1D4ED8 0%, #3B82F6 100%)',
+              background: 'var(--color-brand)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               margin: '0 auto 14px',
-              boxShadow: '0 0 20px rgba(59, 130, 246, 0.4)',
+              boxShadow: 'var(--shadow-sm)',
             }}
           >
             <Shield size={26} color="#FFFFFF" />
@@ -423,7 +399,7 @@ export const SignInPage: React.FC = () => {
               style={{
                 marginTop: '12px',
                 textAlign: 'left',
-                background: 'rgba(8, 12, 20, 0.6)',
+                background: 'var(--bg-app)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
                 padding: '12px',

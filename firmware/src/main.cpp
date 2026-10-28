@@ -22,7 +22,8 @@ constexpr int BUTTON_CANCEL = 15;
 
 constexpr int LED_GREEN     = 17;
 constexpr int LED_RED       = 18;
-constexpr int BUZZER_PIN    = 21;
+constexpr int BUZZER_PIN_POS = 21; // Connect BOTH buzzer (+) legs here
+constexpr int BUZZER_PIN_NEG = 14; // Connect BOTH buzzer (-) legs here
 
 // ==================== AUDIO SPECIFICATIONS ====================
 
@@ -34,11 +35,12 @@ constexpr uint32_t CAPTURE_TIMEOUT_MS = 8000;
 
 // ==================== PERIPHERALS & BUFFERS ====================
 
-U8G2_SH1106_128X64_NONAME_F_HW_I2C display(
+// Use _SW_I2C to bypass ESP32-S3 hardware I2C peripheral lockups on GPIO 40/41
+U8G2_SH1106_128X64_NONAME_F_SW_I2C display(
     U8G2_R0,
-    U8X8_PIN_NONE,
     OLED_SCL,
-    OLED_SDA
+    OLED_SDA,
+    U8X8_PIN_NONE
 );
 
 bool oledReady = false;
@@ -94,13 +96,29 @@ constexpr uint32_t DEBOUNCE_MS = 35;
 // ==================== BUZZER & LEDS ====================
 
 void beep(uint32_t frequency, uint32_t durationMs) {
-    if (!ledcAttach(BUZZER_PIN, frequency, 8)) {
-        return;
+    if (frequency == 0 || durationMs == 0) return;
+
+    pinMode(BUZZER_PIN_POS, OUTPUT);
+    pinMode(BUZZER_PIN_NEG, OUTPUT);
+
+    uint32_t halfPeriodUs = 500000UL / frequency;
+    uint32_t startMs = millis();
+
+    while (millis() - startMs < durationMs) {
+        // Push (+3.3V across piezo)
+        digitalWrite(BUZZER_PIN_POS, HIGH);
+        digitalWrite(BUZZER_PIN_NEG, LOW);
+        delayMicroseconds(halfPeriodUs);
+
+        // Pull (-3.3V across piezo = 6.6V peak-to-peak swing!)
+        digitalWrite(BUZZER_PIN_POS, LOW);
+        digitalWrite(BUZZER_PIN_NEG, HIGH);
+        delayMicroseconds(halfPeriodUs);
     }
-    ledcWriteTone(BUZZER_PIN, frequency);
-    delay(durationMs);
-    ledcWriteTone(BUZZER_PIN, 0);
-    ledcDetach(BUZZER_PIN);
+
+    // Set both LOW so zero current flows when idle
+    digitalWrite(BUZZER_PIN_POS, LOW);
+    digitalWrite(BUZZER_PIN_NEG, LOW);
 }
 
 void successTone() {
@@ -119,35 +137,59 @@ void showScreen(const char* title, const char* line1, const char* line2) {
     if (!oledReady) return;
 
     display.clearBuffer();
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 10, "VOICELOCK ENTERPRISE");
-    display.drawHLine(0, 12, 128);
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(4, 10, "VOICELOCK ENTERPRISE");
+    display.drawHLine(0, 13, 128);
 
-    display.setFont(u8g2_font_ncenB08_tr);
-    display.drawStr(0, 28, title);
+    display.setFont(u8g2_font_7x14B_tf);
+    if (title && title[0]) {
+        char tBuf[20];
+        strncpy(tBuf, title, 18);
+        tBuf[18] = '\0';
+        display.drawStr(4, 28, tBuf);
+    }
 
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 44, line1);
-    display.drawStr(0, 59, line2);
+    display.setFont(u8g2_font_6x10_tf);
+    if (line1 && line1[0]) {
+        char l1Buf[22];
+        strncpy(l1Buf, line1, 20);
+        l1Buf[20] = '\0';
+        display.drawStr(4, 43, l1Buf);
+    }
+    if (line2 && line2[0]) {
+        char l2Buf[22];
+        strncpy(l2Buf, line2, 20);
+        l2Buf[20] = '\0';
+        display.drawStr(4, 57, l2Buf);
+    }
     display.sendBuffer();
 }
 
-void showChallengeScreen(const char* displayDigits) {
+constexpr uint32_t CHALLENGE_PREP_MS = 3500;
+
+void showChallengeScreen(const char* displayDigits, uint32_t elapsedMs = 0, uint32_t totalMs = CHALLENGE_PREP_MS) {
     if (!oledReady) return;
 
     display.clearBuffer();
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 10, "LIVENESS CHALLENGE");
-    display.drawHLine(0, 12, 128);
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(4, 10, "LIVENESS CHALLENGE");
+    display.drawHLine(0, 13, 128);
 
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 24, "Get Ready to Speak:");
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(4, 24, "Get Ready to Speak:");
 
-    display.setFont(u8g2_font_logisoso16_tr);
-    display.drawStr(20, 46, displayDigits ? displayDigits : "---");
+    const char* digits = displayDigits ? displayDigits : "---";
+    display.setFont(u8g2_font_fub14_tr);
+    int w = display.getStrWidth(digits);
+    int x = (128 - w) / 2;
+    if (x < 4) x = 4;
+    display.drawStr(x, 42, digits);
 
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 60, "Recording starting...");
+    display.setFont(u8g2_font_6x10_tf);
+    uint32_t remainingSec = (totalMs > elapsedMs) ? ((totalMs - elapsedMs + 999) / 1000) : 0;
+    char hintBuf[32];
+    snprintf(hintBuf, sizeof(hintBuf), "Recording in %lus...", (unsigned long)remainingSec);
+    display.drawStr(4, 58, hintBuf);
     display.sendBuffer();
 }
 
@@ -155,22 +197,34 @@ void showRecordingScreen(const char* displayDigits, uint32_t currentSamples, uin
     if (!oledReady) return;
 
     display.clearBuffer();
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 10, "SPEAK DIGITS CLEARLY");
-    display.drawHLine(0, 12, 128);
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(4, 10, "SPEAK DIGITS CLEARLY");
+    display.drawHLine(0, 13, 128);
 
-    display.setFont(u8g2_font_logisoso16_tr);
-    display.drawStr(20, 36, displayDigits ? displayDigits : "---");
+    const char* digits = displayDigits ? displayDigits : "---";
+    display.setFont(u8g2_font_fub14_tr);
+    int w = display.getStrWidth(digits);
+    int x = (128 - w) / 2;
+    if (x < 4) x = 4;
+    display.drawStr(x, 28, digits);
 
     uint32_t pct = (totalSamples > 0) ? (currentSamples * 100) / totalSamples : 0;
     if (pct > 100) pct = 100;
-    display.drawFrame(14, 44, 100, 8);
-    display.drawBox(14, 44, pct, 8);
+    int barX = 14;
+    int barY = 34;
+    int barW = 100;
+    int barH = 8;
+    display.drawFrame(barX, barY, barW, barH);
+    int fillW = (pct * (barW - 4)) / 100;
+    if (fillW > 0) {
+        display.drawBox(barX + 2, barY + 2, fillW, barH - 4);
+    }
 
     char progressStr[32];
     snprintf(progressStr, sizeof(progressStr), "Recording: %lu%%", (unsigned long)pct);
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(24, 62, progressStr);
+    display.setFont(u8g2_font_6x10_tf);
+    int pw = display.getStrWidth(progressStr);
+    display.drawStr((128 - pw) / 2, 57, progressStr);
     display.sendBuffer();
 }
 
@@ -178,37 +232,58 @@ void showResultScreen(const VerifyResult& res) {
     if (!oledReady) return;
 
     display.clearBuffer();
-    display.setFont(u8g2_font_6x12_tf);
-    display.drawStr(0, 10, "VOICELOCK VERIFICATION");
-    display.drawHLine(0, 12, 128);
+    display.setFont(u8g2_font_6x10_tf);
+    display.drawStr(4, 10, "VOICELOCK VERIFICATION");
+    display.drawHLine(0, 13, 128);
 
     if (res.isUnlock) {
-        display.setFont(u8g2_font_ncenB08_tr);
-        display.drawStr(0, 28, "ACCESS GRANTED");
-        display.setFont(u8g2_font_6x12_tf);
+        display.setFont(u8g2_font_7x14B_tf);
+        display.drawStr(4, 28, "ACCESS GRANTED");
+        display.setFont(u8g2_font_6x10_tf);
         char sBuf[80];
         snprintf(sBuf, sizeof(sBuf), "User: %s", res.claimedIdentity);
-        display.drawStr(0, 44, sBuf);
+        display.drawStr(4, 43, sBuf);
         char scoreBuf[32];
         snprintf(scoreBuf, sizeof(scoreBuf), "Similarity: %.4f", res.similarity);
-        display.drawStr(0, 59, scoreBuf);
+        display.drawStr(4, 57, scoreBuf);
     } else if (res.httpCode == 200) {
-        display.setFont(u8g2_font_ncenB08_tr);
-        display.drawStr(0, 28, "ACCESS DENIED");
-        display.setFont(u8g2_font_6x12_tf);
-        display.drawStr(0, 44, res.livenessPassed ? "Biometric Mismatch" : "Liveness Failed");
-        display.drawStr(0, 59, res.reason[0] ? res.reason : "Verification Denied");
+        display.setFont(u8g2_font_7x14B_tf);
+        display.drawStr(4, 28, "ACCESS DENIED");
+        display.setFont(u8g2_font_6x10_tf);
+
+        if (res.reason[0] != '\0') {
+            char rBuf[22];
+            strncpy(rBuf, res.reason, 20);
+            rBuf[20] = '\0';
+            display.drawStr(4, 43, rBuf);
+        } else if (!res.livenessPassed) {
+            display.drawStr(4, 43, "Liveness Failed");
+        } else {
+            display.drawStr(4, 43, "Voice Mismatch");
+        }
+
+        char scoreBuf[32];
+        if (res.similarity > 0.0f) {
+            snprintf(scoreBuf, sizeof(scoreBuf), "Score: %.4f (min 0.25)", res.similarity);
+        } else {
+            snprintf(scoreBuf, sizeof(scoreBuf), "Liveness: %s", res.livenessPassed ? "Pass" : "Fail");
+        }
+        display.drawStr(4, 57, scoreBuf);
     } else {
-        display.setFont(u8g2_font_ncenB08_tr);
-        display.drawStr(0, 28, "SERVER ERROR");
-        display.setFont(u8g2_font_6x12_tf);
+        display.setFont(u8g2_font_7x14B_tf);
+        display.drawStr(4, 28, "AUTH / HTTP ERROR");
+        display.setFont(u8g2_font_6x10_tf);
         char hBuf[32];
         snprintf(hBuf, sizeof(hBuf), "HTTP Status: %d", res.httpCode);
-        display.drawStr(0, 44, hBuf);
-        display.drawStr(0, 59, res.errorMessage[0] ? res.errorMessage : "Verification Failed");
+        display.drawStr(4, 43, hBuf);
+        char errBuf[22];
+        strncpy(errBuf, res.errorMessage[0] ? res.errorMessage : "Failed", 20);
+        errBuf[20] = '\0';
+        display.drawStr(4, 57, errBuf);
     }
     display.sendBuffer();
 }
+
 
 void updateDisplay() {
     char line2Buf[32];
@@ -231,9 +306,11 @@ void updateDisplay() {
             showScreen("Requesting...", "Contacting Azure", "POST /challenge");
             break;
 
-        case STATE_CHALLENGE_DISPLAY:
-            showChallengeScreen(activeChallenge.display);
+        case STATE_CHALLENGE_DISPLAY: {
+            uint32_t elapsed = millis() - stateEnteredAt;
+            showChallengeScreen(activeChallenge.display, elapsed, CHALLENGE_PREP_MS);
             break;
+        }
 
         case STATE_RECORDING:
             if (isVerificationFlow) {
@@ -280,10 +357,15 @@ void setState(DeviceState newState) {
 // ==================== BUFFER & I2S INITIALIZATION ====================
 
 bool allocatePcmBuffer() {
-    if (psramFound()) {
+    bool hasPsram = psramFound();
+    if (hasPsram) {
         pcmBuffer = static_cast<int16_t*>(ps_malloc(PCM_BYTES));
+        Serial.printf("PCM_BUFFER_ALLOCATED:PSRAM (free_psram=%lu, free_heap=%lu)\n",
+                      (unsigned long)ESP.getFreePsram(), (unsigned long)ESP.getFreeHeap());
     } else {
         pcmBuffer = static_cast<int16_t*>(malloc(PCM_BYTES));
+        Serial.printf("PCM_BUFFER_ALLOCATED:INTERNAL_HEAP (free_heap=%lu)\n",
+                      (unsigned long)ESP.getFreeHeap());
     }
     return (pcmBuffer != nullptr);
 }
@@ -310,7 +392,61 @@ void detectActiveI2SChannel() {
         if (sOdd != 0)  nonZeroOdd  += abs(sOdd);
     }
 
-    activeChannelOffset = (nonZeroOdd > nonZeroEven * 4) ? 1 : 0;
+    // In ICS-43434 with LR=GND, the microphone transmits data on the Left slot (WS=0, even index)
+    // Default strictly to Left channel (slot 0)
+    activeChannelOffset = 0;
+    if (nonZeroOdd > nonZeroEven * 4 && nonZeroOdd > 1000) {
+        activeChannelOffset = 1;
+    }
+    Serial.printf("I2S_CHANNEL_SELECT:{\"active\":%d,\"left_mag\":%lld,\"right_mag\":%lld}\n",
+                  activeChannelOffset, (long long)nonZeroEven, (long long)nonZeroOdd);
+    Serial.flush();
+}
+
+void runI2SDiagnostic(uint32_t durationMs = 1000) {
+    if (!microphoneReady) {
+        Serial.println("I2S_DIAG_ERROR:Microphone not initialized");
+        return;
+    }
+
+    Serial.println("I2S_DIAG_START:Sampling stereo frames (1s)");
+    int64_t sumSqEven = 0;
+    int64_t sumSqOdd = 0;
+    int32_t minEven = 2147483647, maxEven = -2147483648;
+    int32_t minOdd = 2147483647, maxOdd = -2147483648;
+    size_t totalFrames = 0;
+
+    uint32_t startMs = millis();
+    while (millis() - startMs < durationMs) {
+        size_t bytesRead = i2s.readBytes(reinterpret_cast<char*>(i2sStereoRaw), sizeof(i2sStereoRaw));
+        size_t frames = bytesRead / (2 * sizeof(int32_t));
+        for (size_t i = 0; i < frames; i++) {
+            int32_t sEven = i2sStereoRaw[i * 2] >> 8;
+            int32_t sOdd = i2sStereoRaw[i * 2 + 1] >> 8;
+
+            sumSqEven += (int64_t)sEven * sEven;
+            sumSqOdd += (int64_t)sOdd * sOdd;
+
+            if (sEven < minEven) minEven = sEven;
+            if (sEven > maxEven) maxEven = sEven;
+            if (sOdd < minOdd) minOdd = sOdd;
+            if (sOdd > maxOdd) maxOdd = sOdd;
+
+            totalFrames++;
+        }
+    }
+
+    if (totalFrames == 0) {
+        Serial.println("I2S_DIAG_ERROR:Zero frames read from DMA");
+        return;
+    }
+
+    double rmsEven = sqrt((double)sumSqEven / totalFrames);
+    double rmsOdd = sqrt((double)sumSqOdd / totalFrames);
+
+    Serial.printf("I2S_DIAG:{\"frames\":%u,\"ch0_left_rms\":%.1f,\"ch0_min\":%ld,\"ch0_max\":%ld,\"ch1_right_rms\":%.1f,\"ch1_min\":%ld,\"ch1_max\":%ld,\"active_channel\":%d}\n",
+                  (unsigned int)totalFrames, rmsEven, (long)minEven, (long)maxEven, rmsOdd, (long)minOdd, (long)maxOdd, activeChannelOffset);
+    Serial.flush();
 }
 
 bool initializeMicrophone() {
@@ -328,6 +464,7 @@ bool initializeMicrophone() {
     }
     return ok;
 }
+
 
 // ==================== SAMPLE CONVERSION ====================
 
@@ -390,6 +527,9 @@ void cancelAction() {
 }
 
 void dispatchVerificationUpload() {
+    if (state == STATE_CANCELLED) {
+        return;
+    }
     setState(STATE_UPLOADING);
     Serial.print("UPLOADING_VERIFICATION\n");
     Serial.flush();
@@ -406,6 +546,12 @@ void dispatchVerificationUpload() {
         PCM_BYTES,
         15000
     );
+
+    // If cancellation was invoked during upload, discard response
+    if (state == STATE_CANCELLED) {
+        digitalWrite(LED_GREEN, LOW);
+        return;
+    }
 
     if (activeVerifyResult.isUnlock) {
         // Explicit backend authorization: activate green LED and chime
@@ -451,7 +597,9 @@ void captureStep() {
     size_t remaining = TOTAL_SAMPLES - samplesCaptured;
     if (remaining == 0) {
         if (isVerificationFlow) {
-            dispatchVerificationUpload();
+            if (state == STATE_RECORDING) {
+                dispatchVerificationUpload();
+            }
         } else {
             setState(STATE_TRANSMITTING);
         }
@@ -471,12 +619,15 @@ void captureStep() {
 
     if (samplesCaptured >= TOTAL_SAMPLES) {
         if (isVerificationFlow) {
-            dispatchVerificationUpload();
+            if (state == STATE_RECORDING) {
+                dispatchVerificationUpload();
+            }
         } else {
             setState(STATE_TRANSMITTING);
         }
     }
 }
+
 
 void transmitAudioPayload() {
     Serial.print("AUDIO_BEGIN\n");
@@ -518,6 +669,12 @@ void startChallengeRequest() {
         return;
     }
 
+    time_t curTime = time(nullptr);
+    if (curTime < 1700000000) {
+        Serial.println("NTP_RESYNCING_FOR_CHALLENGE");
+        syncNtpTime(4000, nullptr);
+    }
+
     setState(STATE_CHALLENGE_REQUESTING);
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
@@ -540,8 +697,9 @@ void startChallengeRequest() {
         digitalWrite(LED_RED, LOW);
         beep(2000, 40);
 
-        Serial.printf("CHALLENGE_RECEIVED:{\"id\":\"%s\",\"session\":\"%s\",\"digits\":\"%s\",\"display\":\"%s\"}\n",
-                      activeChallenge.challengeId, activeChallenge.sessionId, activeChallenge.digits, activeChallenge.display);
+        // Sanitize serial output: log challenge digits for UI validation without dumping raw session tokens
+        Serial.printf("CHALLENGE_RECEIVED:{\"digits\":\"%s\",\"display\":\"%s\"}\n",
+                      activeChallenge.digits, activeChallenge.display);
         Serial.flush();
 
         setState(STATE_CHALLENGE_DISPLAY);
@@ -578,6 +736,9 @@ void pollButtons() {
                 } else {
                     beginRecording(false);
                 }
+            } else if (state == STATE_CHALLENGE_DISPLAY) {
+                // User is ready to speak immediately, skip remaining countdown
+                beginRecording(true);
             }
         }
     }
@@ -611,21 +772,53 @@ void setup() {
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
 
-    // Initialize OLED on SDA=41, SCL=40
-    Wire.begin(OLED_SDA, OLED_SCL);
-    Wire.setClock(100000);
+    pinMode(BUZZER_PIN_POS, OUTPUT);
+    pinMode(BUZZER_PIN_NEG, OUTPUT);
+    digitalWrite(BUZZER_PIN_POS, LOW);
+    digitalWrite(BUZZER_PIN_NEG, LOW);
 
-    for (uint8_t addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0 && (addr == 0x3C || addr == 0x3D)) {
-            detectedOledAddress = addr;
+    // Give SH1106 controller time to stabilize power rail
+    delay(150);
+
+    // Diagnostic check using Wire first to verify physical wiring on 41/40
+    pinMode(OLED_SDA, INPUT_PULLUP);
+    pinMode(OLED_SCL, INPUT_PULLUP);
+    delay(5);
+    Serial.printf("OLED pin levels before init: SDA(%d)=%d, SCL(%d)=%d\n",
+                  OLED_SDA, digitalRead(OLED_SDA),
+                  OLED_SCL, digitalRead(OLED_SCL));
+
+    Wire.begin(OLED_SDA, OLED_SCL, 100000);
+    detectedOledAddress = 0;
+
+    for (uint8_t address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+            Serial.printf("I2C device found at 0x%02X (SDA=%d, SCL=%d)\n", address, OLED_SDA, OLED_SCL);
+            if (address == 0x3C || address == 0x3D) {
+                detectedOledAddress = address;
+            }
         }
     }
+    Wire.end(); // Release hardware I2C peripheral so U8G2_SW_I2C owns GPIO 40/41 cleanly
+
     if (detectedOledAddress != 0) {
         display.setI2CAddress(detectedOledAddress << 1);
+        Serial.printf("OLED: DETECTED at 0x%02X\n", detectedOledAddress);
+    } else {
+        display.setI2CAddress(0x3C << 1);
+        Serial.println("OLED: No ACK on hardware scan (check 3V3/GND/SDA=41/SCL=40 wires!), trying SW_I2C init at 0x3C...");
     }
+
     oledReady = display.begin();
-    Wire.setClock(100000);
+    display.setBusClock(100000);
+
+    if (oledReady) {
+        display.setPowerSave(0);
+        display.setContrast(255);
+        showScreen("VOICELOCK", "Starting...", "");
+    }
 
     setState(STATE_STARTING);
 
@@ -645,7 +838,7 @@ void setup() {
     // Step 2: Wi-Fi and SNTP Initialization
     bool wifiOk = initWifi(8000, showScreen);
     if (wifiOk) {
-        syncNtpTime(5000, showScreen);
+        syncNtpTime(10000, showScreen);
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, LOW);
         beep(1800, 60);
@@ -670,6 +863,12 @@ void loop() {
     if (state == STATE_READY) {
         maintainWifi();
 
+        // Refresh OLED periodically (every 1000ms) to ensure display never stays blank
+        if (millis() - lastDisplayUpdate >= 1000) {
+            lastDisplayUpdate = millis();
+            updateDisplay();
+        }
+
         static uint32_t lastReadyPing = 0;
         if (millis() - lastReadyPing >= 2000) {
             lastReadyPing = millis();
@@ -679,11 +878,14 @@ void loop() {
 
         while (Serial.available() > 0) {
             char c = static_cast<char>(Serial.read());
-            if (c == 'R') {
+            if (c == 'R' || c == 'r') {
                 beginRecording(false);
                 break;
-            } else if (c == 'C' || c == 'V') {
+            } else if (c == 'C' || c == 'c' || c == 'V' || c == 'v') {
                 startChallengeRequest();
+                break;
+            } else if (c == 'D' || c == 'd') {
+                runI2SDiagnostic(1000);
                 break;
             }
         }
@@ -691,10 +893,9 @@ void loop() {
 
     switch (state) {
         case STATE_CHALLENGE_DISPLAY:
-            // Allow 1.5 seconds for user to glance at digits, then begin recording
-            if (millis() - stateEnteredAt >= 1500) {
+            if (millis() - stateEnteredAt >= CHALLENGE_PREP_MS) {
                 beginRecording(true);
-            } else if (millis() - lastDisplayUpdate >= 250) {
+            } else if (millis() - lastDisplayUpdate >= 200) {
                 lastDisplayUpdate = millis();
                 updateDisplay();
             }
@@ -740,3 +941,4 @@ void loop() {
             break;
     }
 }
+

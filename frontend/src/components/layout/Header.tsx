@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, LogOut, User, Mic } from 'lucide-react';
+import { Database, LogOut, User, Mic, Menu, X } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 import { useAuth } from '../../context/useAuth';
 import { Badge } from '../ui/Badge';
@@ -8,9 +8,18 @@ import { Button } from '../ui/Button';
 interface HeaderProps {
   activeTab: NavigationTab;
   onOpenQuickVerification?: () => void;
+  isMobileNavOpen?: boolean;
+  onToggleMobileNav?: () => void;
+  mobileMenuButtonRef?: React.Ref<HTMLButtonElement>;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerification }) => {
+export const Header: React.FC<HeaderProps> = ({
+  activeTab,
+  onOpenQuickVerification,
+  isMobileNavOpen = false,
+  onToggleMobileNav,
+  mobileMenuButtonRef,
+}) => {
   const { user, signOut } = useAuth();
   const isAdmin = user?.role === 'admin';
 
@@ -47,97 +56,67 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
 
   return (
     <header className="top-header">
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <h1 className="text-xl font-bold text-primary" style={{ letterSpacing: '-0.01em', margin: 0 }}>
-            {title}
-          </h1>
-          {user?.isDemoUser ? (
-            <Badge variant="warning">Local Demonstration</Badge>
-          ) : (
-            <Badge variant="success">Cloud Operations</Badge>
-          )}
+      <div className="header-left">
+        {/* Mobile menu drawer toggle button */}
+        {onToggleMobileNav && (
+          <button
+            type="button"
+            className="mobile-menu-btn"
+            ref={mobileMenuButtonRef}
+            onClick={onToggleMobileNav}
+            aria-label={isMobileNavOpen ? 'Close navigation drawer' : 'Open navigation drawer'}
+            aria-expanded={isMobileNavOpen}
+            aria-controls="main-navigation"
+          >
+            {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+        )}
+
+        <div className="header-title-block">
+          <div className="header-heading-row">
+            <h1 className="header-title">{title}</h1>
+            {user?.isDemoUser ? (
+              <Badge variant="warning">Local Demonstration</Badge>
+            ) : (
+              <Badge variant="success">Cloud Operations</Badge>
+            )}
+          </div>
+          <p className="header-subtitle">{subtitle}</p>
         </div>
-        <p className="text-xs text-muted" style={{ marginTop: '3px', margin: 0 }}>
-          {subtitle}
-        </p>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-        {/* Backend Connectivity Status */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(14, 20, 34, 0.8)',
-            border: '1px solid var(--border-subtle)',
-            padding: '6px 12px',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
-          <span
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              backgroundColor: '#10B981',
-              boxShadow: '0 0 8px #10B981',
-              display: 'inline-block',
-            }}
-          />
-          <span className="text-xs font-mono font-medium text-secondary">
-            FastAPI :8000
-          </span>
-          <span className="text-xs text-muted">|</span>
-          <Database size={13} color="#94A3B8" />
-          <span className="text-xs font-mono text-secondary">
-            Postgres
-          </span>
+      <div className="header-right">
+        {/* Context only: page-level telemetry reports actual API status. */}
+        <div className="header-status-pill" title="Authenticated session context; backend status is shown in the active workspace">
+          <span className="status-label">SESSION</span>
+          <span className="status-divider">|</span>
+          <Database size={13} className="status-icon" />
+          <span className="status-label">AUTHENTICATED</span>
         </div>
 
         {/* Authenticated Principal Info */}
         {user && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              background: 'rgba(14, 20, 34, 0.8)',
-              border: '1px solid var(--border-subtle)',
-              padding: '4px 10px 4px 6px',
-              borderRadius: 'var(--radius-sm)',
-            }}
-          >
+          <div className="header-user-pill">
             <div
-              style={{
-                width: '26px',
-                height: '26px',
-                borderRadius: 'var(--radius-sm)',
-                background: isAdmin ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
+              className={`header-user-avatar ${isAdmin ? 'avatar-admin' : 'avatar-user'}`}
             >
-              <User size={14} color={isAdmin ? '#60A5FA' : '#34D399'} />
+              <User size={13} />
             </div>
-            <div style={{ lineHeight: '1.2' }}>
-              <div className="text-xs font-semibold text-primary" style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div className="header-user-meta">
+              <span className="header-user-name">
                 {user.displayName || user.email}
-              </div>
-              <div className="text-xs font-mono" style={{ color: isAdmin ? '#60A5FA' : '#34D399', fontSize: '10px' }}>
+              </span>
+              <span className={`header-user-role ${isAdmin ? 'role-admin' : 'role-user'}`}>
                 {user.role.toUpperCase()}
-              </div>
+              </span>
             </div>
             <button
               onClick={() => signOut()}
               title="Sign Out"
               aria-label="Sign Out"
-              className="btn btn-secondary"
-              style={{ padding: '4px 6px', marginLeft: '4px', border: 'none', background: 'transparent', cursor: 'pointer' }}
+              className="header-signout-btn"
             >
-              <LogOut size={14} color="var(--text-muted)" />
+              <LogOut size={13} />
             </button>
           </div>
         )}
@@ -148,8 +127,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onOpenQuickVerificati
             variant="default"
             size="sm"
             onClick={onOpenQuickVerification}
+            className="header-quick-action"
           >
-            <Mic size={14} /> Quick Verification
+            <Mic size={14} />
+            <span className="quick-action-text">Quick Verification</span>
           </Button>
         )}
       </div>

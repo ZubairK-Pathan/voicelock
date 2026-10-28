@@ -10,6 +10,7 @@ import {
   Sliders,
   UserCheck,
   User,
+  X,
 } from 'lucide-react';
 import type { NavigationTab } from '../../types';
 import { useAuth } from '../../context/useAuth';
@@ -24,12 +25,18 @@ interface SidebarProps {
     alerts?: number;
     mappings?: number;
   };
+  isOpen?: boolean;
+  onClose?: () => void;
+  closeButtonRef?: React.Ref<HTMLButtonElement>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onTabChange,
   counts,
+  isOpen = false,
+  onClose,
+  closeButtonRef,
 }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -80,58 +87,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="sidebar">
+    <aside id="main-navigation" className={`sidebar ${isOpen ? 'open' : ''}`} aria-label="Main Navigation">
       {/* Brand */}
       <div className="sidebar-brand">
-        <div className="sidebar-logo-icon">
-          <Shield size={20} color="#FFFFFF" />
-        </div>
-        <div>
-          <div className="font-bold text-base text-primary" style={{ letterSpacing: '-0.02em', lineHeight: '1.2' }}>
-            VoiceLock
+        <div className="sidebar-brand-content">
+          <div className="sidebar-logo-icon">
+            <Shield size={18} color="#FFFFFF" />
           </div>
-          <div className="text-xs font-mono" style={{ color: '#60A5FA', letterSpacing: '0.05em' }}>
-            ENTERPRISE SEC
+          <div>
+            <div className="sidebar-title">
+              VoiceLock
+            </div>
+            <div className="sidebar-subtitle">
+              ENTERPRISE SEC
+            </div>
           </div>
         </div>
+
+        {/* Mobile close button */}
+        {onClose && (
+          <button
+            type="button"
+            className="sidebar-close-btn"
+            ref={closeButtonRef}
+            onClick={onClose}
+            aria-label="Close navigation sidebar"
+          >
+            <X size={16} />
+          </button>
+        )}
       </div>
 
       {/* Authenticated Operator Identity Card */}
       {user && (
-        <div
-          style={{
-            padding: '12px 14px',
-            margin: '12px 12px 0 12px',
-            background: 'rgba(255, 255, 255, 0.03)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-sm)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-          }}
-        >
+        <div className="sidebar-user-card">
           <div
-            style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: 'var(--radius-sm)',
-              background: isAdmin ? 'rgba(59, 130, 246, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
+            className={`sidebar-user-avatar ${isAdmin ? 'avatar-admin' : 'avatar-user'}`}
           >
-            <User size={16} color={isAdmin ? '#60A5FA' : '#34D399'} />
+            <User size={15} />
           </div>
-          <div style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
-            <div
-              className="text-xs font-semibold text-primary"
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            >
+          <div className="sidebar-user-details">
+            <div className="sidebar-user-name">
               {user.displayName || user.email?.split('@')[0] || 'Operator'}
             </div>
-            <div style={{ marginTop: '2px' }}>
+            <div className="sidebar-user-badge">
               <Badge variant={isAdmin ? 'default' : 'success'}>
                 {isAdmin ? 'SECURITY ADMIN' : 'OPERATOR'}
               </Badge>
@@ -142,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Navigation */}
       <nav className="sidebar-nav">
-        <div className="text-xs font-semibold text-muted" style={{ padding: '8px 14px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        <div className="sidebar-nav-header">
           {isAdmin ? 'Operations & Control' : 'Access Portal'}
         </div>
         {navItems.map((item) => {
@@ -154,19 +153,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`nav-link ${isActive ? 'active' : ''}`}
             >
               <div className="nav-link-left">
-                <span style={{ color: isActive ? 'var(--color-brand)' : 'inherit' }}>
+                <span className={`nav-icon ${isActive ? 'nav-icon-active' : ''}`}>
                   {item.icon}
                 </span>
-                <span>{item.label}</span>
+                <span className="nav-label">{item.label}</span>
               </div>
               {item.badge !== undefined && (
                 <span
-                  className="font-mono text-xs font-semibold"
+                  className="nav-badge font-mono"
                   style={{
-                    backgroundColor: item.badgeColor ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                    backgroundColor: item.badgeColor ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.08)',
                     color: item.badgeColor || 'var(--text-secondary)',
-                    padding: '1px 7px',
-                    borderRadius: '10px',
                   }}
                 >
                   {item.badge}
@@ -179,26 +176,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* System Telemetry Metadata */}
       <div className="sidebar-footer">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <span className="text-xs text-muted font-medium" style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-            <Activity size={12} color="#10B981" /> ML Engine Active
+        <div className="sidebar-telemetry-status">
+          <span className="telemetry-label">
+            <Activity size={12} color="var(--color-emerald)" /> Voice model
           </span>
-          <span className="text-xs font-mono" style={{ color: '#10B981', fontWeight: 600 }}>
+          <span className="telemetry-version font-mono">
             v2.4-tdnn
           </span>
         </div>
-        <div className="card" style={{ padding: '10px 12px', background: 'rgba(14, 20, 34, 0.6)', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-          <div className="text-xs text-muted font-mono" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+        <div className="sidebar-telemetry-box">
+          <div className="telemetry-row font-mono">
             <span>Architecture</span>
-            <span className="text-secondary">ECAPA-TDNN</span>
+            <span className="telemetry-value">ECAPA-TDNN</span>
           </div>
-          <div className="text-xs text-muted font-mono" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <div className="telemetry-row font-mono">
             <span>Embedding Dim</span>
-            <span className="text-secondary">192-d mono</span>
+            <span className="telemetry-value">192-d mono</span>
           </div>
-          <div className="text-xs text-muted font-mono" style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div className="telemetry-row font-mono">
             <span>Calibrated EER</span>
-            <span className="text-secondary" style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <span className="telemetry-value telemetry-eer">
               <Sliders size={10} /> 0.2500
             </span>
           </div>

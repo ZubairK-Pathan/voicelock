@@ -10,11 +10,11 @@
 // ============================================================================
 
 #ifndef WIFI_SSID
-#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_SSID "Team_Rocket"
 #endif
 
 #ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_PASSWORD "m#P52s@ap$V5g"
 #endif
 
 #ifndef VOICELOCK_BACKEND_HOST

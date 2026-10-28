@@ -4,10 +4,11 @@ import { cn } from '../../lib/utils';
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {}
 
 export const Card = React.forwardRef<HTMLDivElement, CardProps>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
       className={cn('card', className)}
+      style={style}
       {...props}
     />
   )
@@ -15,11 +16,11 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
 Card.displayName = 'Card';
 
 export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('flex flex-col gap-1.5 pb-4', className)}
-      style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '12px' }}
+      className={cn('card-header', className)}
+      style={style}
       {...props}
     />
   )
@@ -27,11 +28,11 @@ export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
 CardHeader.displayName = 'CardHeader';
 
 export const CardTitle = React.forwardRef<HTMLHeadingElement, React.HTMLAttributes<HTMLHeadingElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <h3
       ref={ref}
-      className={cn('text-base font-semibold text-primary tracking-tight', className)}
-      style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', margin: 0, letterSpacing: '-0.01em' }}
+      className={cn('card-title', className)}
+      style={style}
       {...props}
     />
   )
@@ -39,11 +40,11 @@ export const CardTitle = React.forwardRef<HTMLHeadingElement, React.HTMLAttribut
 CardTitle.displayName = 'CardTitle';
 
 export const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLParagraphElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <p
       ref={ref}
-      className={cn('text-xs text-secondary', className)}
-      style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}
+      className={cn('card-description', className)}
+      style={style}
       {...props}
     />
   )
@@ -51,10 +52,11 @@ export const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTML
 CardDescription.displayName = 'CardDescription';
 
 export const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
       className={cn('card-content', className)}
+      style={style}
       {...props}
     />
   )
@@ -62,11 +64,11 @@ export const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes
 CardContent.displayName = 'CardContent';
 
 export const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('flex items-center pt-4', className)}
-      style={{ display: 'flex', alignItems: 'center', paddingTop: '14px', marginTop: '14px', borderTop: '1px solid var(--border-subtle)' }}
+      className={cn('card-footer', className)}
+      style={style}
       {...props}
     />
   )

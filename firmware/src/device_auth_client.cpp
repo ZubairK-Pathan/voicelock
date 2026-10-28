@@ -140,7 +140,7 @@ ChallengeResult requestLivenessChallenge(
     // 8. Configure WiFiClientSecure with Root CA
     WiFiClientSecure secureClient;
     secureClient.setCACert(AZURE_ROOT_CA_CERT);
-    secureClient.setTimeout(timeoutMs / 1000);
+    secureClient.setTimeout(timeoutMs);
 
     HTTPClient https;
     char url[256];
@@ -151,6 +151,7 @@ ChallengeResult requestLivenessChallenge(
         return res;
     }
 
+    https.setConnectTimeout(timeoutMs);
     https.setTimeout(timeoutMs);
     https.addHeader("X-Device-ID", deviceId);
     https.addHeader("X-Device-Timestamp", tsStr);
@@ -162,7 +163,9 @@ ChallengeResult requestLivenessChallenge(
     res.httpCode = httpCode;
 
     if (httpCode <= 0) {
-        snprintf(res.errorMessage, sizeof(res.errorMessage), "TLS/Connect error (%d)", httpCode);
+        char errBuf[128] = {0};
+        secureClient.lastError(errBuf, sizeof(errBuf));
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "TLS/Connect error (%d): %s", httpCode, errBuf);
         https.end();
         return res;
     }
@@ -226,6 +229,236 @@ ChallengeResult requestLivenessChallenge(
     res.expiresInSeconds = doc["expires_in_seconds"] | 60;
     res.success = true;
     return res;
+}
+
+// Helper to ensure every byte of a buffer is fully transmitted over WiFiClientSecure
+static bool writeAll(WiFiClientSecure& client, const uint8_t* data, size_t length, uint32_t timeoutMs = 8000) {
+    if (data == nullptr || length == 0) return true;
+    size_t totalWritten = 0;
+    uint32_t lastProgressMs = millis();
+
+    while (totalWritten < length) {
+        if (!client.connected()) {
+            return false;
+        }
+        size_t toWrite = length - totalWritten;
+        if (toWrite > 4096) toWrite = 4096;
+
+        size_t written = client.write(data + totalWritten, toWrite);
+        if (written > 0) {
+            totalWritten += written;
+            lastProgressMs = millis();
+        } else {
+            if (millis() - lastProgressMs > timeoutMs) {
+                return false;
+            }
+            delay(10);
+        }
+    }
+    return (totalWritten == length);
+}
+
+// Structured HTTP response representation with bounded memory
+struct HttpResponse {
+    int httpCode = 0;
+    bool success = false;
+    char body[4096] = {0};
+    size_t bodyLen = 0;
+    char error[96] = {0};
+};
+
+// Bounded HTTP response parser supporting Content-Length and Transfer-Encoding: chunked
+static HttpResponse readBoundedHttpResponse(WiFiClientSecure& client, uint32_t timeoutMs = 12000) {
+    HttpResponse resp;
+    resp.httpCode = 0;
+    resp.success = false;
+    resp.bodyLen = 0;
+    resp.body[0] = '\0';
+    resp.error[0] = '\0';
+
+    uint32_t startMs = millis();
+    while (client.available() == 0 && (millis() - startMs < timeoutMs)) {
+        if (!client.connected()) break;
+        delay(10);
+    }
+
+    if (client.available() == 0) {
+        snprintf(resp.error, sizeof(resp.error), "Response timeout from server");
+        return resp;
+    }
+
+    // 1. Read status line
+    client.setTimeout(timeoutMs);
+    String statusLine = client.readStringUntil('\n');
+    statusLine.trim();
+    if (!statusLine.startsWith("HTTP/1.")) {
+        snprintf(resp.error, sizeof(resp.error), "Invalid HTTP status line");
+        return resp;
+    }
+
+    int firstSpace = statusLine.indexOf(' ');
+    if (firstSpace > 0 && firstSpace + 4 <= (int)statusLine.length()) {
+        resp.httpCode = statusLine.substring(firstSpace + 1, firstSpace + 4).toInt();
+    } else {
+        snprintf(resp.error, sizeof(resp.error), "Malformed HTTP code in status line");
+        return resp;
+    }
+
+    // 2. Read headers and parse framing
+    int contentLength = -1;
+    bool isChunked = false;
+    uint32_t headerReadStart = millis();
+
+    while (client.connected() || client.available() > 0) {
+        if (millis() - headerReadStart > timeoutMs) {
+            snprintf(resp.error, sizeof(resp.error), "Header read timeout");
+            return resp;
+        }
+
+        String headerLine = client.readStringUntil('\n');
+        headerLine.trim();
+        if (headerLine.length() == 0) {
+            break; // Empty line separates headers from body
+        }
+
+        String lowerHeader = headerLine;
+        lowerHeader.toLowerCase();
+
+        if (lowerHeader.startsWith("content-length:")) {
+            int colon = lowerHeader.indexOf(':');
+            if (colon > 0) {
+                contentLength = lowerHeader.substring(colon + 1).toInt();
+            }
+        } else if (lowerHeader.startsWith("transfer-encoding:") && lowerHeader.indexOf("chunked") != -1) {
+            isChunked = true;
+        }
+    }
+
+    // 3. Read body according to framing
+    constexpr size_t MAX_RESP_BODY = sizeof(resp.body) - 1; // 4095 bytes
+
+    if (isChunked) {
+        size_t totalRead = 0;
+        uint32_t chunkStart = millis();
+
+        while (true) {
+            if (millis() - chunkStart > timeoutMs) {
+                snprintf(resp.error, sizeof(resp.error), "Chunked body read timeout");
+                return resp;
+            }
+
+            String lenLine = client.readStringUntil('\n');
+            lenLine.trim();
+            if (lenLine.length() == 0) continue;
+
+            long chunkLen = strtol(lenLine.c_str(), nullptr, 16);
+            if (chunkLen < 0 || chunkLen > 65536) {
+                snprintf(resp.error, sizeof(resp.error), "Invalid chunk length: %ld", chunkLen);
+                return resp;
+            }
+
+            if (chunkLen == 0) {
+                // Final 0-chunk: read any trailer headers
+                while (client.connected() || client.available() > 0) {
+                    String trailer = client.readStringUntil('\n');
+                    trailer.trim();
+                    if (trailer.length() == 0) break;
+                }
+                break;
+            }
+
+            if (totalRead + chunkLen > MAX_RESP_BODY) {
+                snprintf(resp.error, sizeof(resp.error), "Response body exceeded %u bytes", (unsigned int)MAX_RESP_BODY);
+                return resp;
+            }
+
+            size_t chunkBytesRead = 0;
+            while (chunkBytesRead < (size_t)chunkLen) {
+                if (millis() - chunkStart > timeoutMs) {
+                    snprintf(resp.error, sizeof(resp.error), "Chunk data read timeout");
+                    return resp;
+                }
+                if (!client.connected() && client.available() == 0) {
+                    snprintf(resp.error, sizeof(resp.error), "Connection dropped during chunk read");
+                    return resp;
+                }
+                size_t needed = (size_t)chunkLen - chunkBytesRead;
+                size_t got = client.readBytes(reinterpret_cast<uint8_t*>(resp.body + totalRead), needed);
+                if (got > 0) {
+                    totalRead += got;
+                    chunkBytesRead += got;
+                    chunkStart = millis();
+                } else {
+                    delay(5);
+                }
+            }
+
+            client.readStringUntil('\n'); // Consume trailing \r\n
+        }
+
+        resp.body[totalRead] = '\0';
+        resp.bodyLen = totalRead;
+        resp.success = true;
+    } else if (contentLength >= 0) {
+        if ((size_t)contentLength > MAX_RESP_BODY) {
+            snprintf(resp.error, sizeof(resp.error), "Content-Length %d exceeds buffer (%u)", contentLength, (unsigned int)MAX_RESP_BODY);
+            return resp;
+        }
+
+        size_t totalRead = 0;
+        uint32_t bodyStart = millis();
+
+        while (totalRead < (size_t)contentLength) {
+            if (millis() - bodyStart > timeoutMs) {
+                snprintf(resp.error, sizeof(resp.error), "Body read timeout");
+                return resp;
+            }
+            if (!client.connected() && client.available() == 0) {
+                snprintf(resp.error, sizeof(resp.error), "Connection dropped: read %u of %d bytes", (unsigned int)totalRead, contentLength);
+                return resp;
+            }
+
+            size_t needed = (size_t)contentLength - totalRead;
+            size_t got = client.readBytes(reinterpret_cast<uint8_t*>(resp.body + totalRead), needed);
+            if (got > 0) {
+                totalRead += got;
+                bodyStart = millis();
+            } else {
+                delay(5);
+            }
+        }
+
+        resp.body[totalRead] = '\0';
+        resp.bodyLen = totalRead;
+        resp.success = true;
+    } else {
+        // Read until connection closed, bounded by buffer
+        size_t totalRead = 0;
+        uint32_t bodyStart = millis();
+
+        while ((client.connected() || client.available() > 0) && totalRead < MAX_RESP_BODY) {
+            if (millis() - bodyStart > timeoutMs) {
+                break;
+            }
+            size_t avail = client.available();
+            if (avail > 0) {
+                size_t toRead = (avail < (MAX_RESP_BODY - totalRead)) ? avail : (MAX_RESP_BODY - totalRead);
+                size_t got = client.readBytes(reinterpret_cast<uint8_t*>(resp.body + totalRead), toRead);
+                if (got > 0) {
+                    totalRead += got;
+                    bodyStart = millis();
+                }
+            } else {
+                delay(5);
+            }
+        }
+
+        resp.body[totalRead] = '\0';
+        resp.bodyLen = totalRead;
+        resp.success = (totalRead > 0);
+    }
+
+    return resp;
 }
 
 VerifyResult uploadAudioVerification(
@@ -329,85 +562,99 @@ VerifyResult uploadAudioVerification(
     // 7. Connect via WiFiClientSecure with strict Root CA validation
     WiFiClientSecure secureClient;
     secureClient.setCACert(AZURE_ROOT_CA_CERT);
-    secureClient.setTimeout(timeoutMs / 1000);
+    secureClient.setTimeout(timeoutMs);
 
     if (!secureClient.connect(host, port)) {
-        snprintf(res.errorMessage, sizeof(res.errorMessage), "TLS connect failed to %s", host);
+        char errBuf[128] = {0};
+        secureClient.lastError(errBuf, sizeof(errBuf));
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "TLS connect failed to %s: %s", host, errBuf);
         return res;
     }
 
-    // 8. Send HTTP request headers
-    secureClient.printf("POST /verify HTTP/1.1\r\n");
-    secureClient.printf("Host: %s:%u\r\n", host, port);
-    secureClient.printf("User-Agent: ESP32-VoiceLock\r\n");
-    secureClient.printf("X-Device-ID: %s\r\n", deviceId);
-    secureClient.printf("X-Device-Timestamp: %s\r\n", tsStr);
-    secureClient.printf("X-Device-Nonce: %s\r\n", nonceStr);
-    secureClient.printf("X-Device-Signature: %s\r\n", sigHex);
-    secureClient.printf("Content-Type: multipart/form-data; boundary=%s\r\n", boundary);
-    secureClient.printf("Content-Length: %u\r\n", (unsigned int)totalBodyLength);
-    secureClient.printf("Connection: close\r\n\r\n");
+    // 8. Format HTTP request headers
+    char reqHeaderBuf[512];
+    int headerLen = snprintf(reqHeaderBuf, sizeof(reqHeaderBuf),
+        "POST /verify HTTP/1.1\r\n"
+        "Host: %s:%u\r\n"
+        "User-Agent: ESP32-VoiceLock\r\n"
+        "X-Device-ID: %s\r\n"
+        "X-Device-Timestamp: %s\r\n"
+        "X-Device-Nonce: %s\r\n"
+        "X-Device-Signature: %s\r\n"
+        "Content-Type: multipart/form-data; boundary=%s\r\n"
+        "Content-Length: %u\r\n"
+        "Connection: close\r\n\r\n",
+        host, port, deviceId, tsStr, nonceStr, sigHex, boundary, (unsigned int)totalBodyLength
+    );
 
-    // 9. Stream multipart body
-    secureClient.write(reinterpret_cast<const uint8_t*>(part1), part1Len);
-    secureClient.write(wavHeader, sizeof(wavHeader));
-
-    const uint8_t* pcmRaw = reinterpret_cast<const uint8_t*>(pcmData);
-    size_t sent = 0;
-    constexpr size_t CHUNK_SIZE = 4096;
-    while (sent < pcmBytes && secureClient.connected()) {
-        size_t toSend = (pcmBytes - sent < CHUNK_SIZE) ? (pcmBytes - sent) : CHUNK_SIZE;
-        size_t written = secureClient.write(pcmRaw + sent, toSend);
-        if (written == 0) break;
-        sent += written;
-    }
-    secureClient.write(reinterpret_cast<const uint8_t*>(partTail), tailLen);
-    secureClient.flush();
-
-    // 10. Read HTTP response
-    uint32_t respStart = millis();
-    while (secureClient.available() == 0 && (millis() - respStart < timeoutMs)) {
-        delay(10);
-        if (!secureClient.connected()) break;
-    }
-
-    if (secureClient.available() == 0) {
-        snprintf(res.errorMessage, sizeof(res.errorMessage), "Server response timeout");
+    if (headerLen <= 0 || (size_t)headerLen >= sizeof(reqHeaderBuf)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Header buffer overflow");
         secureClient.stop();
         return res;
     }
 
-    String statusLine = secureClient.readStringUntil('\n');
-    statusLine.trim();
-    int httpCode = 0;
-    if (statusLine.startsWith("HTTP/1.")) {
-        int firstSpace = statusLine.indexOf(' ');
-        if (firstSpace > 0) {
-            httpCode = statusLine.substring(firstSpace + 1, firstSpace + 4).toInt();
-        }
-    }
-    res.httpCode = httpCode;
-
-    // Skip response headers
-    while (secureClient.connected()) {
-        String headerLine = secureClient.readStringUntil('\n');
-        headerLine.trim();
-        if (headerLine.length() == 0) {
-            break; // Empty line separates headers from body
-        }
-    }
-
-    String responseBody = secureClient.readString();
-    secureClient.stop();
-
-    if (httpCode != 200) {
-        snprintf(res.errorMessage, sizeof(res.errorMessage), "HTTP %d: %s", httpCode, responseBody.substring(0, 48).c_str());
+    // Send HTTP headers using writeAll
+    if (!writeAll(secureClient, reinterpret_cast<const uint8_t*>(reqHeaderBuf), headerLen, 5000)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Failed to transmit HTTP headers");
+        secureClient.stop();
         return res;
     }
 
-    // 11. Parse JSON response
+    // 9. Send multipart prefix using writeAll
+    if (!writeAll(secureClient, reinterpret_cast<const uint8_t*>(part1), part1Len, 5000)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Failed to transmit multipart prefix");
+        secureClient.stop();
+        return res;
+    }
+
+    // 10. Send 44-byte WAV header using writeAll
+    if (!writeAll(secureClient, wavHeader, sizeof(wavHeader), 5000)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Failed to transmit WAV header");
+        secureClient.stop();
+        return res;
+    }
+
+    // 11. Stream PCM samples in bounded chunks with writeAll
+    const uint8_t* pcmRaw = reinterpret_cast<const uint8_t*>(pcmData);
+    size_t sent = 0;
+    constexpr size_t CHUNK_SIZE = 4096;
+    while (sent < pcmBytes) {
+        size_t toSend = (pcmBytes - sent < CHUNK_SIZE) ? (pcmBytes - sent) : CHUNK_SIZE;
+        if (!writeAll(secureClient, pcmRaw + sent, toSend, 5000)) {
+            snprintf(res.errorMessage, sizeof(res.errorMessage), "Failed to stream PCM chunk at %u bytes", (unsigned int)sent);
+            secureClient.stop();
+            return res; // Abort immediately on incomplete transmission
+        }
+        sent += toSend;
+    }
+
+    // 12. Send closing boundary using writeAll
+    if (!writeAll(secureClient, reinterpret_cast<const uint8_t*>(partTail), tailLen, 5000)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Failed to transmit closing boundary");
+        secureClient.stop();
+        return res;
+    }
+    secureClient.flush();
+
+    // 13. Read bounded HTTP response (handles Content-Length and Transfer-Encoding: chunked)
+    HttpResponse httpResp = readBoundedHttpResponse(secureClient, timeoutMs);
+    secureClient.stop();
+
+    res.httpCode = httpResp.httpCode;
+    if (!httpResp.success) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "%s (HTTP %d)", httpResp.error, httpResp.httpCode);
+        return res;
+    }
+
+    if (httpResp.httpCode != 200) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "HTTP %d: %s", httpResp.httpCode, httpResp.body);
+        res.errorMessage[sizeof(res.errorMessage) - 1] = '\0';
+        return res;
+    }
+
+    // 14. Parse JSON response safely
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, responseBody);
+    DeserializationError err = deserializeJson(doc, httpResp.body);
     if (err) {
         snprintf(res.errorMessage, sizeof(res.errorMessage), "JSON Parse error: %s", err.c_str());
         return res;
@@ -428,3 +675,4 @@ VerifyResult uploadAudioVerification(
     res.success = true;
     return res;
 }
+

@@ -34,7 +34,9 @@ export const Badge: React.FC<BadgeProps> = ({ value, label, showDot = true }) =>
             borderRadius: '50%',
             backgroundColor: 'currentColor',
             display: 'inline-block',
+            flexShrink: 0,
           }}
+          aria-hidden="true"
         />
       )}
       {displayLabel}
