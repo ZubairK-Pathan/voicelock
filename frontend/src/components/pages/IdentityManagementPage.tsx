@@ -257,7 +257,7 @@ export const IdentityManagementPage: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="admin-data-page identity-page">
       {/* Success Notification Banner */}
       {successNotice && (
         <div

@@ -245,10 +245,10 @@ export const VerificationPage: React.FC = () => {
       errorMessage?.toLowerCase().includes('forbidden'));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
+    <div className="verification-page">
       {/* Real Verification Live Status Banner */}
       <div
-        className="card"
+        className="card verification-brief"
         style={{
           background: 'rgba(59, 130, 246, 0.08)',
           borderLeft: '4px solid var(--color-brand)',
@@ -332,9 +332,9 @@ export const VerificationPage: React.FC = () => {
       )}
 
       {/* Verification Workspace Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px' }}>
+      <div className="verification-workspace">
         {/* Step 1: Identity & Challenge Generation */}
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div className="card verification-step" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <div>
             <span className="text-xs font-semibold text-muted font-mono" style={{ textTransform: 'uppercase' }}>
               Step 1: Identity & Authentication Context
@@ -428,7 +428,7 @@ export const VerificationPage: React.FC = () => {
         </div>
 
         {/* Step 2: Spoken Liveness Challenge & Microphone Recording */}
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div className="card verification-step verification-capture-step" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <div>
             <span className="text-xs font-semibold text-muted font-mono" style={{ textTransform: 'uppercase' }}>
               Step 2: Spoken Liveness & Audio Capture
@@ -759,7 +759,7 @@ export const VerificationPage: React.FC = () => {
       {/* Verification Error Card (Non-2xx / Network Failures) */}
       {pageState === 'error' && errorMessage && !isUnmappedIdentityError && (
         <div
-          className="card"
+          className="card verification-error"
           data-testid="verification-error-card"
           style={{
             background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(14, 20, 34, 0.95) 100%)',
@@ -806,7 +806,7 @@ export const VerificationPage: React.FC = () => {
       {/* Step 3: Verified Result Card (Rendered Strictly From Real Backend Payload) */}
       {pageState === 'result' && verificationResult && (
         <div
-          className="card"
+          className="card verification-result"
           data-testid="verification-result-card"
           style={{
             border: `1px solid ${

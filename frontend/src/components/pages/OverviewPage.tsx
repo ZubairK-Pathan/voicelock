@@ -505,10 +505,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
   // ADMINISTRATOR SYSTEM OVERVIEW
   // ═══════════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div className="operations-page">
       {/* Top Banner Notice */}
       <div
-        className="card"
+        className="card operations-intro"
         style={{
           background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.08) 0%, rgba(14, 20, 34, 0.8) 100%)',
           borderLeft: '4px solid var(--color-brand)',
@@ -630,7 +630,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       )}
 
       {/* KPI Cards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+      <div className="operations-metrics">
         <StatCard
           title="Enrolled Biometric Profiles"
           value={isLoading ? '—' : speakersCount !== null ? speakersCount : '—'}
@@ -664,7 +664,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Verification Telemetry Breakdown Card */}
-      <div className="card">
+      <div className="card operations-panel operations-telemetry">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
           <div>
             <h3 className="text-base font-semibold text-primary">Biometric Decision Telemetry</h3>
@@ -677,9 +677,9 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+        <div className="operations-outcomes">
           {/* Verified */}
-          <div
+          <div className="operation-outcome outcome-verified"
             style={{
               padding: '14px 16px',
               borderRadius: 'var(--radius-sm)',
@@ -702,7 +702,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </div>
 
           {/* Biometric Rejected */}
-          <div
+          <div className="operation-outcome outcome-rejected"
             style={{
               padding: '14px 16px',
               borderRadius: 'var(--radius-sm)',
@@ -725,7 +725,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </div>
 
           {/* Challenge Failed */}
-          <div
+          <div className="operation-outcome outcome-challenge"
             style={{
               padding: '14px 16px',
               borderRadius: 'var(--radius-sm)',
@@ -748,7 +748,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           </div>
 
           {/* Processing Error */}
-          <div
+          <div className="operation-outcome outcome-processing"
             style={{
               padding: '14px 16px',
               borderRadius: 'var(--radius-sm)',
@@ -800,9 +800,9 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Middle Split: Biometric Calibration & Security Alerts */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
+      <div className="operations-split">
         {/* ML Calibration Status */}
-        <div className="card">
+        <div className="card operations-panel calibration-panel">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <div>
               <h3 className="text-base font-semibold text-primary">Biometric Model Calibration</h3>
@@ -857,7 +857,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
         </div>
 
         {/* Threat & Replay Monitoring */}
-        <div className="card">
+        <div className="card operations-panel threat-panel">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <div>
               <h3 className="text-base font-semibold text-primary">Threat & Replay Monitoring</h3>
@@ -928,7 +928,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Recent Biometric Access Attempts Table / Uninstrumented State */}
-      <div className="card">
+      <div className="card operations-panel activity-panel">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
           <div>
             <h3 className="text-base font-semibold text-primary">Recent Biometric Access Attempts</h3>

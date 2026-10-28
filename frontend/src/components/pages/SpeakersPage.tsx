@@ -87,7 +87,7 @@ export const SpeakersPage: React.FC = () => {
   }, [speakers, search]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="admin-data-page speakers-page">
       {/* Page Actions & Search Header */}
       <div
         className="card"

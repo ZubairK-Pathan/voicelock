@@ -621,3 +621,270 @@
     padding: 16px;
   }
 }
+
+/* =========================================================================
+   OPERATIONAL WORKSPACES
+   The product deliberately avoids the familiar "floating-card dashboard"
+   pattern. These layouts use measured divisions, information bands, and
+   compact technical typography instead of decoration.
+   ========================================================================= */
+
+.operations-page,
+.verification-page,
+.admin-data-page {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.operations-page .card,
+.verification-page > .card,
+.verification-workspace .card,
+.admin-data-page > .card {
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.operations-intro,
+.verification-brief {
+  background: transparent !important;
+  border: 0 !important;
+  border-top: 1px solid var(--border-medium) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  border-left: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 18px 0 !important;
+}
+
+.operations-intro > div:first-child,
+.verification-brief > div {
+  gap: 14px !important;
+}
+
+.operations-intro > div:first-child > div:first-child,
+.verification-brief > div > svg {
+  color: var(--color-brand) !important;
+}
+
+.operations-intro > div:first-child > div:first-child {
+  background: var(--color-brand-subtle) !important;
+  border: 1px solid var(--color-brand-border);
+  border-radius: 2px !important;
+}
+
+.operations-intro .btn-primary,
+.verification-page .btn-primary {
+  background: var(--color-brand);
+  color: #17120c;
+  border-color: transparent;
+}
+
+.operations-intro .btn-primary:hover,
+.verification-page .btn-primary:hover {
+  background: var(--color-brand-hover);
+}
+
+.operations-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border-medium);
+  border: 1px solid var(--border-medium);
+}
+
+.operations-metrics .stat-card {
+  min-height: 152px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--bg-surface);
+  padding: 18px;
+}
+
+.operations-metrics .stat-card:hover {
+  border: 0;
+  background: var(--bg-card-hover);
+}
+
+.operations-metrics .stat-card-icon {
+  border-radius: 2px;
+  background: var(--bg-surface-raised) !important;
+  color: var(--color-brand-light) !important;
+}
+
+.operations-metrics .stat-card-value {
+  font-size: 32px;
+  letter-spacing: -0.05em;
+}
+
+.operations-panel {
+  background: var(--bg-surface) !important;
+  border-color: var(--border-medium) !important;
+  padding: 22px !important;
+}
+
+.operations-panel > div:first-child h3,
+.verification-step h3 {
+  letter-spacing: -0.02em;
+}
+
+.operations-telemetry {
+  border-top: 2px solid var(--color-brand-border) !important;
+}
+
+.operations-outcomes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px !important;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+}
+
+.operation-outcome {
+  background: var(--bg-card) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 16px !important;
+  min-height: 116px;
+}
+
+.operation-outcome.outcome-verified { border-top: 2px solid var(--color-emerald) !important; }
+.operation-outcome.outcome-rejected { border-top: 2px solid var(--color-rose) !important; }
+.operation-outcome.outcome-challenge { border-top: 2px solid var(--color-amber) !important; }
+.operation-outcome.outcome-processing { border-top: 2px solid var(--text-muted) !important; }
+
+.operations-split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 1px;
+  background: var(--border-medium);
+  border: 1px solid var(--border-medium);
+}
+
+.operations-split .operations-panel {
+  border: 0 !important;
+}
+
+.calibration-panel {
+  border-top: 2px solid var(--color-brand-border) !important;
+}
+
+.threat-panel {
+  border-top: 2px solid var(--color-rose-border) !important;
+}
+
+.activity-panel {
+  border-top: 2px solid var(--border-medium) !important;
+}
+
+.verification-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.78fr) minmax(400px, 1.22fr);
+  gap: 1px;
+  background: var(--border-medium);
+  border: 1px solid var(--border-medium);
+}
+
+.verification-step {
+  background: var(--bg-surface) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 24px !important;
+}
+
+.verification-step > div:first-child > span {
+  color: var(--color-brand-light) !important;
+  letter-spacing: 0.11em !important;
+}
+
+.verification-capture-step {
+  background: var(--bg-card) !important;
+}
+
+.verification-page [data-testid="challenge-display-card"] {
+  background: var(--bg-surface-raised) !important;
+  border: 1px solid var(--color-brand-border) !important;
+  border-top: 2px solid var(--color-brand) !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+
+.verification-page [data-testid="challenge-digits-display"] {
+  color: var(--color-brand-light) !important;
+  text-shadow: none !important;
+}
+
+.verification-page [data-testid="verification-result-card"],
+.verification-page [data-testid="verification-error-card"],
+.verification-page [data-testid="unmapped-identity-alert"] {
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+
+.admin-data-page > .card {
+  background: var(--bg-surface) !important;
+  border-color: var(--border-medium) !important;
+  box-shadow: none !important;
+}
+
+.admin-data-page > .card:first-child {
+  background: transparent !important;
+  border: 0 !important;
+  border-top: 1px solid var(--border-medium) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  border-radius: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.admin-data-page .table-container {
+  border-radius: 0;
+  border-color: var(--border-medium);
+}
+
+.admin-data-page .enterprise-table th {
+  background: var(--bg-surface-raised);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.admin-data-page .enterprise-table tr:hover td {
+  background: rgba(236, 197, 142, 0.035);
+}
+
+@media (max-width: 1100px) {
+  .operations-metrics,
+  .operations-outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operations-split,
+  .verification-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .operations-page,
+  .verification-page,
+  .admin-data-page {
+    gap: 20px;
+  }
+
+  .operations-metrics,
+  .operations-outcomes {
+    grid-template-columns: 1fr;
+  }
+
+  .operations-panel,
+  .verification-step {
+    padding: 18px !important;
+  }
+
+  .operations-intro > div:last-child {
+    width: 100%;
+    justify-content: space-between !important;
+  }
+}
