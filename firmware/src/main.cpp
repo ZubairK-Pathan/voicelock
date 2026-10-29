@@ -43,6 +43,12 @@ U8G2_SH1106_128X64_NONAME_F_SW_I2C display(
     U8X8_PIN_NONE
 );
 
+// Override Arduino loopTask stack size from default 8192 to 16384 bytes
+// to prevent stack overflow during TLS handshake and multipart audio upload
+size_t getArduinoLoopTaskStackSize(void) {
+    return 16384;
+}
+
 bool oledReady = false;
 uint8_t detectedOledAddress = 0;
 
@@ -51,6 +57,8 @@ bool microphoneReady = false;
 
 int16_t* pcmBuffer = nullptr;
 size_t samplesCaptured = 0;
+size_t captureZeroReads = 0;
+size_t captureLastReadBytes = 0;
 
 // Read stereo frames (Left + Right 32-bit slots = 256 int32_t values = 128 stereo frames)
 constexpr size_t STEREO_FRAMES_PER_READ = 128;
@@ -502,6 +510,8 @@ void beginRecording(bool forVerification = false) {
 
     isVerificationFlow = forVerification;
     samplesCaptured = 0;
+    captureZeroReads = 0;
+    captureLastReadBytes = 0;
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
     beep(1800, 70);
@@ -515,6 +525,8 @@ void beginRecording(bool forVerification = false) {
 void cancelAction() {
     if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING) {
         samplesCaptured = 0;
+        captureZeroReads = 0;
+        captureLastReadBytes = 0;
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
         errorTone();
@@ -589,7 +601,14 @@ void captureStep() {
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
         errorTone();
-        Serial.print("ERROR_I2S_TIMEOUT\n");
+        uint32_t elapsedMs = millis() - stateEnteredAt;
+        Serial.printf("ERROR_I2S_TIMEOUT:{\"captured\":%u,\"target\":%u,\"elapsed_ms\":%lu,\"zero_reads\":%u,\"last_read_bytes\":%u}\n",
+                      (unsigned int)samplesCaptured,
+                      (unsigned int)TOTAL_SAMPLES,
+                      (unsigned long)elapsedMs,
+                      (unsigned int)captureZeroReads,
+                      (unsigned int)captureLastReadBytes);
+        Serial.flush();
         setState(STATE_ERROR);
         return;
     }
@@ -597,9 +616,7 @@ void captureStep() {
     size_t remaining = TOTAL_SAMPLES - samplesCaptured;
     if (remaining == 0) {
         if (isVerificationFlow) {
-            if (state == STATE_RECORDING) {
-                dispatchVerificationUpload();
-            }
+            setState(STATE_UPLOADING);
         } else {
             setState(STATE_TRANSMITTING);
         }
@@ -610,6 +627,10 @@ void captureStep() {
     size_t bytesRequested = framesToRequest * 2 * sizeof(int32_t);
 
     size_t bytesRead = i2s.readBytes(reinterpret_cast<char*>(i2sStereoRaw), bytesRequested);
+    captureLastReadBytes = bytesRead;
+    if (bytesRead == 0) {
+        captureZeroReads++;
+    }
     size_t framesRead = bytesRead / (2 * sizeof(int32_t));
 
     for (size_t i = 0; i < framesRead && samplesCaptured < TOTAL_SAMPLES; i++) {
@@ -619,9 +640,7 @@ void captureStep() {
 
     if (samplesCaptured >= TOTAL_SAMPLES) {
         if (isVerificationFlow) {
-            if (state == STATE_RECORDING) {
-                dispatchVerificationUpload();
-            }
+            setState(STATE_UPLOADING);
         } else {
             setState(STATE_TRANSMITTING);
         }
@@ -672,7 +691,16 @@ void startChallengeRequest() {
     time_t curTime = time(nullptr);
     if (curTime < 1700000000) {
         Serial.println("NTP_RESYNCING_FOR_CHALLENGE");
-        syncNtpTime(4000, nullptr);
+        showScreen("TIME SYNC", "Resyncing NTP...", "Please wait");
+        syncNtpTime(8000, showScreen);
+        curTime = time(nullptr);
+        if (curTime < 1700000000) {
+            showScreen("Time Not Set", "NTP sync required", "Press START again");
+            errorTone();
+            delay(2000);
+            setState(STATE_READY);
+            return;
+        }
     }
 
     setState(STATE_CHALLENGE_REQUESTING);
@@ -769,6 +797,10 @@ void setup() {
     pinMode(BUTTON_CANCEL, INPUT_PULLUP);
     pinMode(LED_GREEN, OUTPUT);
     pinMode(LED_RED, OUTPUT);
+    // Boot visual self-test: flash both LEDs briefly (250ms) to verify physical wiring
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, HIGH);
+    delay(250);
     digitalWrite(LED_GREEN, LOW);
     digitalWrite(LED_RED, LOW);
 
@@ -838,10 +870,29 @@ void setup() {
     // Step 2: Wi-Fi and SNTP Initialization
     bool wifiOk = initWifi(8000, showScreen);
     if (wifiOk) {
-        syncNtpTime(10000, showScreen);
-        digitalWrite(LED_GREEN, LOW);
-        digitalWrite(LED_RED, LOW);
-        beep(1800, 60);
+        bool ntpOk = false;
+        constexpr int MAX_NTP_ATTEMPTS = 5;
+        for (int attempt = 1; attempt <= MAX_NTP_ATTEMPTS && !ntpOk; attempt++) {
+            char line2Buf[32];
+            snprintf(line2Buf, sizeof(line2Buf), "Querying NTP (%d/%d)...", attempt, MAX_NTP_ATTEMPTS);
+            showScreen("TIME SYNC", line2Buf, "pool.ntp.org");
+            ntpOk = syncNtpTime(6000, showScreen);
+            if (!ntpOk && attempt < MAX_NTP_ATTEMPTS) {
+                delay(1000);
+            }
+        }
+
+        if (ntpOk) {
+            digitalWrite(LED_GREEN, LOW);
+            digitalWrite(LED_RED, LOW);
+            beep(1800, 60);
+        } else {
+            showScreen("NTP FAILED", "Clock uncalibrated", "Serial mode active");
+            digitalWrite(LED_RED, HIGH);
+            errorTone();
+            delay(2000);
+            digitalWrite(LED_RED, LOW);
+        }
     } else {
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
@@ -903,14 +954,10 @@ void loop() {
 
         case STATE_RECORDING:
             captureStep();
-            if (millis() - lastDisplayUpdate >= 250) {
-                lastDisplayUpdate = millis();
-                updateDisplay();
-            }
             break;
 
         case STATE_UPLOADING:
-            // Handled during dispatchVerificationUpload
+            dispatchVerificationUpload();
             break;
 
         case STATE_RESULT:

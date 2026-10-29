@@ -498,7 +498,7 @@ VerifyResult uploadAudioVerification(
     // 2. Format multipart/form-data boundary & parts
     const char* boundary = "----VoiceLockFormBoundary7MA4YWxkTrZu0gW";
 
-    char part1[512];
+    static char part1[1024];
     int part1Len = snprintf(
         part1, sizeof(part1),
         "--%s\r\nContent-Disposition: form-data; name=\"claimed_identity\"\r\n\r\n%s\r\n"
@@ -510,6 +510,11 @@ VerifyResult uploadAudioVerification(
         boundary, sessionId,
         boundary
     );
+
+    if (part1Len <= 0 || (size_t)part1Len >= sizeof(part1)) {
+        snprintf(res.errorMessage, sizeof(res.errorMessage), "Multipart buffer overflow");
+        return res;
+    }
 
     char partTail[64];
     int tailLen = snprintf(partTail, sizeof(partTail), "\r\n--%s--\r\n", boundary);
@@ -549,7 +554,7 @@ VerifyResult uploadAudioVerification(
              static_cast<unsigned long>(esp_random()));
 
     // 5. Canonical signing string: METHOD\nPATH\nTIMESTAMP\nNONCE\nBODY_SHA256
-    char canonical[256];
+    static char canonical[256];
     snprintf(canonical, sizeof(canonical), "POST\n/verify\n%s\n%s\n%s", tsStr, nonceStr, bodySha256);
 
     // 6. Compute HMAC-SHA256 signature
@@ -572,7 +577,7 @@ VerifyResult uploadAudioVerification(
     }
 
     // 8. Format HTTP request headers
-    char reqHeaderBuf[512];
+    static char reqHeaderBuf[1024];
     int headerLen = snprintf(reqHeaderBuf, sizeof(reqHeaderBuf),
         "POST /verify HTTP/1.1\r\n"
         "Host: %s:%u\r\n"

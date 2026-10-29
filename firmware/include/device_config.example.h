@@ -2,23 +2,24 @@
 
 // ============================================================================
 // VoiceLock Enterprise — Firmware Device Configuration Template
-// 
+//
 // Copy this file to "device_config.h" and configure your local network
 // and provisioned device credentials.
-// 
+//
 // NEVER commit "device_config.h" or plain-text secrets to version control.
 // ============================================================================
 
 #ifndef WIFI_SSID
-#define WIFI_SSID "Team_Rocket"
+#define WIFI_SSID "YOUR_WIFI_SSID"
 #endif
 
 #ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "m#P52s@ap$V5g"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 #endif
 
 #ifndef VOICELOCK_BACKEND_HOST
-#define VOICELOCK_BACKEND_HOST "voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io"
+#define VOICELOCK_BACKEND_HOST                                                 \
+  "voicelock-api.orangesand-9922d50e.eastasia.azurecontainerapps.io"
 #endif
 
 #ifndef VOICELOCK_BACKEND_PORT

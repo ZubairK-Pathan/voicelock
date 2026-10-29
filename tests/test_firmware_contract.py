@@ -629,3 +629,55 @@ class TestFirmwareContract:
         res = client.post("/challenge", content=tampered_body, headers=headers_good)
         assert res.status_code == 401
 
+    def test_capture_timeout_diagnostics_and_display_suppression(self):
+        """Verify firmware implements bounded I2S timeout diagnostics and avoids OLED transfers during capture."""
+        main_file = FIRMWARE_ROOT / "src" / "main.cpp"
+        assert main_file.is_file()
+        content = main_file.read_text(encoding="utf-8")
+
+        # 1. Bounded diagnostic tracking variables must be declared
+        assert "size_t captureZeroReads = 0;" in content
+        assert "size_t captureLastReadBytes = 0;" in content
+
+        # 2. beginRecording and cancelAction must initialize and reset diagnostic counters
+        begin_block = content.split("void beginRecording(bool forVerification")[1].split("void cancelAction()")[0]
+        assert "captureZeroReads = 0;" in begin_block
+        assert "captureLastReadBytes = 0;" in begin_block
+
+        cancel_block = content.split("void cancelAction()")[1].split("void dispatchVerificationUpload()")[0]
+        assert "captureZeroReads = 0;" in cancel_block
+        assert "captureLastReadBytes = 0;" in cancel_block
+
+        # 3. captureStep must update counters and emit structured timeout diagnostics
+        capture_block = content.split("void captureStep()")[1].split("void transmitAudioPayload()")[0]
+        assert "captureLastReadBytes = bytesRead;" in capture_block
+        assert "if (bytesRead == 0)" in capture_block
+        assert "captureZeroReads++;" in capture_block
+
+        # Check structured JSON fields in ERROR_I2S_TIMEOUT log
+        assert "ERROR_I2S_TIMEOUT:{\\\"captured\\\":%u,\\\"target\\\":%u,\\\"elapsed_ms\\\":%lu,\\\"zero_reads\\\":%u,\\\"last_read_bytes\\\":%u}\\n" in capture_block
+
+        # Check safety invariants on timeout: Green LED strictly LOW, Red LED HIGH, error tone
+        timeout_subblock = capture_block.split("if (millis() - stateEnteredAt > CAPTURE_TIMEOUT_MS)")[1].split("setState(STATE_ERROR);")[0]
+        assert "digitalWrite(LED_GREEN, LOW);" in timeout_subblock
+        assert "digitalWrite(LED_RED, HIGH);" in timeout_subblock
+        assert "errorTone();" in timeout_subblock
+
+        # 4. In loop(), under STATE_RECORDING, display updating is suppressed during active capture
+        loop_block = content.split("void loop()")[1]
+        recording_case = loop_block.split("case STATE_RECORDING:")[1].split("case STATE_UPLOADING:")[0]
+        assert "captureStep();" in recording_case
+        assert "updateDisplay();" not in recording_case
+
+        # 5. Diagnostic JSON parsing contract verification
+        import json
+        mock_log = 'ERROR_I2S_TIMEOUT:{"captured":51200,"target":80000,"elapsed_ms":8001,"zero_reads":0,"last_read_bytes":1024}'
+        prefix, json_str = mock_log.split(":", 1)
+        assert prefix == "ERROR_I2S_TIMEOUT"
+        parsed = json.loads(json_str)
+        assert parsed["captured"] == 51200
+        assert parsed["target"] == 80000
+        assert parsed["elapsed_ms"] == 8001
+        assert parsed["zero_reads"] == 0
+        assert parsed["last_read_bytes"] == 1024
+
