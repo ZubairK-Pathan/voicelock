@@ -4,6 +4,7 @@ app/schemas/verification.py — Pydantic schemas for identification and verifica
 
 from typing import Optional
 from pydantic import BaseModel, Field
+from app.schemas.speaker import SpeakerEnrollmentResponse
 
 
 class IdentifyResponse(BaseModel):

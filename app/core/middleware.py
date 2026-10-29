@@ -45,6 +45,9 @@ class RequestSizeLimiterMiddleware:
         clean_path = path.rstrip("/")
         if clean_path in {"/verify", "/identify"}:
             return self.max_upload_bytes
+        if clean_path == "/speakers":
+            # Multi-sample speaker enrollment ceiling (5x per-audio upload limit)
+            return self.max_upload_bytes * 5
         return self.max_default_bytes
 
     async def __call__(self, scope, receive, send):

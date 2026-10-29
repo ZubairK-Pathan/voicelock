@@ -104,6 +104,13 @@ ENDPOINT_POLICIES: list[EndpointPolicy] = [
         description="Enrolled speaker directory. Restricted to Admin to prevent user enumeration.",
     ),
     EndpointPolicy(
+        path="/speakers",
+        method="POST",
+        auth_scheme=AuthScheme.FIREBASE_JWT,
+        required_permissions=[Permission.SPEAKER_ENROLL],
+        description="Enroll a new biometric speaker voiceprint into the persistent registry. Restricted to Admin.",
+    ),
+    EndpointPolicy(
         path="/devices",
         method="GET",
         auth_scheme=AuthScheme.FIREBASE_JWT,

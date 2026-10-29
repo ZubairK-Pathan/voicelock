@@ -5,6 +5,7 @@ from app.schemas.verification import (
     VerifyResponse,
     SpeakersResponse,
     HealthResponse,
+    SpeakerEnrollmentResponse,
 )
 from app.schemas.mapping import (
     CreateMappingRequest,

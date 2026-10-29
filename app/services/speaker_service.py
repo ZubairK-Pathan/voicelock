@@ -17,10 +17,15 @@ Guarantees:
    without redundant in-memory reloads.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+import json
+from pathlib import Path
+import re
+from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+import torch
 
 from app.core.config import SERVER_THRESHOLD
 from app.core.embeddings import (
@@ -30,8 +35,15 @@ from app.core.embeddings import (
 )
 from app.db.base import SpeakerRecord
 from app.db.session import get_db_context
-from app.repositories.speaker_repository import SpeakerRepository
-from audio_utils import load_embedding_model, get_device
+from app.repositories.speaker_repository import SpeakerRepository, DuplicateSpeakerError
+from audio_utils import (
+    load_audio,
+    normalize_audio,
+    generate_embedding,
+    load_embedding_model,
+    get_device,
+    TARGET_SAMPLE_RATE,
+)
 import predict
 
 
@@ -251,6 +263,119 @@ class SpeakerService:
             profiles={clean_identity: target_vec},
             verbose=False,
         )
+
+    def enroll_speaker(
+        self,
+        speaker_id: str,
+        full_name: Optional[str] = None,
+        audio_paths: Optional[List[Union[str, Path]]] = None,
+        enrolled_by: Optional[str] = None,
+        classifier=None,
+    ) -> SpeakerRecord:
+        """
+        Enroll a new speaker profile by aggregating 3 to 10 audio samples into a 192-d centroid embedding.
+        Persists the record in the database using SpeakerRepository within the caller's session.
+        Does NOT commit the transaction (caller owns commit/rollback).
+        """
+        if not speaker_id or not speaker_id.strip():
+            raise ValueError("speaker_id must be a non-empty string.")
+
+        clean_id = speaker_id.strip()
+        if not (2 <= len(clean_id) <= 64):
+            raise ValueError(f"speaker_id length ({len(clean_id)}) must be between 2 and 64 characters.")
+
+        if not re.match(r"^[A-Za-z0-9_\- ]+$", clean_id):
+            raise ValueError(
+                "speaker_id may only contain alphanumeric characters, spaces, hyphens, and underscores."
+            )
+
+        clean_full_name = full_name.strip() if full_name and full_name.strip() else None
+        if clean_full_name and len(clean_full_name) > 128:
+            raise ValueError("full_name must be 128 characters or fewer.")
+
+        # Check for case-insensitive duplicate in database
+        try:
+            stmt = select(SpeakerRecord).where(func.lower(SpeakerRecord.speaker_id) == clean_id.lower())
+            existing = self.session.scalar(stmt)
+        except SQLAlchemyError as exc:
+            raise SpeakerServiceDatabaseError(f"Database error while checking duplicate for '{clean_id}'.") from exc
+
+        if existing is not None:
+            raise DuplicateSpeakerError(f"Speaker with speaker_id '{clean_id}' already exists.")
+
+        # Validate sample count (3 to 10)
+        if not audio_paths or len(audio_paths) < 3:
+            raise ValueError(
+                f"At least 3 audio samples are required for enrollment (got {len(audio_paths) if audio_paths else 0})."
+            )
+        if len(audio_paths) > 10:
+            raise ValueError(
+                f"At most 10 audio samples are allowed for enrollment (got {len(audio_paths)})."
+            )
+
+        clf = classifier or get_classifier()
+        embeddings: List[np.ndarray] = []
+        durations: List[float] = []
+
+        for idx, path in enumerate(audio_paths):
+            p = Path(path)
+            if not p.exists():
+                raise ValueError(f"Sample {idx + 1} file not found: {p}")
+
+            try:
+                waveform, sr = load_audio(p, target_sr=TARGET_SAMPLE_RATE)
+            except Exception as exc:
+                raise ValueError(f"Sample {idx + 1} audio could not be decoded: {exc}") from exc
+
+            # Validate duration: 1.0s to 30.0s
+            num_samples = waveform.shape[-1]
+            duration_sec = float(num_samples) / float(sr)
+            if duration_sec < 1.0 or duration_sec > 30.0:
+                raise ValueError(
+                    f"Sample {idx + 1} duration ({duration_sec:.2f}s) must be between 1.0 and 30.0 seconds."
+                )
+
+            # Validate audio energy / non-silence
+            max_amp = float(waveform.abs().max())
+            rms = float(torch.sqrt(torch.mean(waveform ** 2)))
+            if max_amp < 0.01 or rms < 0.001:
+                raise ValueError(
+                    f"Sample {idx + 1} contains insufficient audio energy or silence (peak: {max_amp:.4f}, RMS: {rms:.5f})."
+                )
+
+            # Peak normalize and extract embedding
+            norm_waveform = normalize_audio(waveform)
+            emb = generate_embedding(clf, norm_waveform, sr)
+            emb_arr = np.asarray(emb, dtype=np.float32)
+            if emb_arr.shape != (DEFAULT_EMBEDDING_DIM,):
+                raise ValueError(f"Sample {idx + 1} generated invalid embedding dimension: {emb_arr.shape}")
+
+            embeddings.append(emb_arr)
+            durations.append(round(duration_sec, 2))
+
+        # Centroid embedding aggregation
+        profile_embedding = np.mean(embeddings, axis=0).astype(np.float32)
+
+        metadata = {
+            "enrolled_by": enrolled_by,
+            "sample_count": len(embeddings),
+            "sample_durations": durations,
+        }
+
+        try:
+            return self.repo.create(
+                speaker_id=clean_id,
+                full_name=clean_full_name,
+                status="active",
+                embedding_dim=DEFAULT_EMBEDDING_DIM,
+                sample_count=len(embeddings),
+                embedding=profile_embedding,
+                metadata_json=json.dumps(metadata),
+            )
+        except DuplicateSpeakerError:
+            raise
+        except SQLAlchemyError as exc:
+            raise SpeakerServiceDatabaseError(f"Database error while saving speaker profile '{clean_id}'.") from exc
 
 
 # ─── Backward-Compatible Helpers ───────────────────────────────────────────────
