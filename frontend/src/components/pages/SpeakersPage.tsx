@@ -6,18 +6,29 @@ import {
   Lock,
   ShieldAlert,
   Database,
+  UserPlus,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { SearchBar } from '../common/SearchBar';
 import { Badge } from '../common/Badge';
 import { apiClient } from '../../lib/apiClient';
+import { useAuth } from '../../context/useAuth';
+import { SpeakerEnrollmentModal } from '../speakers/SpeakerEnrollmentModal';
 
 export const SpeakersPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
   const [speakers, setSpeakers] = useState<string[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [statusCode, setStatusCode] = useState<number | null>(null);
   const [search, setSearch] = useState<string>('');
+
+  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
+  const [enrollSuccessMessage, setEnrollSuccessMessage] = useState<string | null>(null);
 
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
@@ -120,6 +131,25 @@ export const SpeakersPage: React.FC = () => {
             </span>
           )}
 
+          {isAdmin && (
+            <button
+              onClick={() => setIsEnrollModalOpen(true)}
+              className="btn btn-primary"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                fontSize: '12px',
+              }}
+              title="Enroll new speaker with biometric samples"
+              aria-label="Enroll new speaker"
+            >
+              <UserPlus size={13} />
+              Enroll Speaker
+            </button>
+          )}
+
           <button
             onClick={handleRefresh}
             disabled={isLoading}
@@ -133,6 +163,38 @@ export const SpeakersPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Success Notification Banner */}
+      {enrollSuccessMessage && (
+        <div
+          className="card"
+          style={{
+            padding: '12px 18px',
+            borderLeft: '4px solid var(--color-emerald)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            background: 'rgba(16, 185, 129, 0.06)',
+          }}
+          role="status"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <CheckCircle2 size={18} color="var(--color-emerald)" style={{ flexShrink: 0 }} />
+            <div className="text-xs font-semibold text-primary">
+              {enrollSuccessMessage}
+            </div>
+          </div>
+          <button
+            onClick={() => setEnrollSuccessMessage(null)}
+            className="modal-close-btn"
+            style={{ padding: '4px' }}
+            aria-label="Dismiss notification"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Loading State */}
       {isLoading && (
@@ -223,15 +285,34 @@ export const SpeakersPage: React.FC = () => {
             </div>
             <p className="text-xs text-muted" style={{ maxWidth: '440px' }}>
               The persistent speaker registry currently contains no active voice profiles.
-              Run the safe speaker database seeder to import approved participant voiceprints.
+              Enroll an authorized speaker identity below or run the safe database seeder to import profiles.
             </p>
-            <button
-              onClick={handleRefresh}
-              className="btn btn-secondary"
-              style={{ marginTop: '10px', fontSize: '12px' }}
-            >
-              <RefreshCw size={13} /> Check Database Again
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
+              {isAdmin && (
+                <button
+                  onClick={() => setIsEnrollModalOpen(true)}
+                  className="btn btn-primary"
+                  style={{
+                    fontSize: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 14px',
+                  }}
+                  title="Enroll new speaker with biometric samples"
+                >
+                  <UserPlus size={13} />
+                  Enroll Speaker
+                </button>
+              )}
+              <button
+                onClick={handleRefresh}
+                className="btn btn-secondary"
+                style={{ fontSize: '12px' }}
+              >
+                <RefreshCw size={13} /> Check Database Again
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -300,6 +381,16 @@ export const SpeakersPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Biometric Speaker Enrollment Modal */}
+      <SpeakerEnrollmentModal
+        isOpen={isEnrollModalOpen}
+        onClose={() => setIsEnrollModalOpen(false)}
+        onSuccess={(newSpeakerId) => {
+          setEnrollSuccessMessage(`Speaker "${newSpeakerId}" was successfully enrolled into the biometric registry.`);
+          handleRefresh();
+        }}
+      />
     </div>
   );
 };

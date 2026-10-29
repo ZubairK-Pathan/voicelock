@@ -50,6 +50,23 @@ export interface SpeakersApiResponse {
   count: number;
 }
 
+export interface SpeakerEnrollmentResponse {
+  speaker_id: string;
+  full_name: string | null;
+  status: string;
+  sample_count: number;
+  embedding_dim: number;
+  created_at: string;
+}
+
+export interface HealthApiResponse {
+  status: string;
+  service: string;
+  version: string;
+  threshold?: number | null;
+  enrolled_speakers?: number | null;
+}
+
 export interface DeviceSummaryItem {
   device_id: string;
   name: string | null;

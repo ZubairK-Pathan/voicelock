@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users,
   Cpu,
-  CheckCircle2,
   AlertTriangle,
   ArrowRight,
   ShieldCheck,
@@ -23,7 +22,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui
 import { Alert, AlertTitle, AlertDescription } from '../ui/Alert';
 import { useAuth } from '../../context/useAuth';
 import { apiClient } from '../../lib/apiClient';
-import type { NavigationTab, VerificationMetricsResponse } from '../../types';
+import type { NavigationTab, HealthApiResponse } from '../../types';
 
 interface OverviewPageProps {
   onNavigate: (tab: NavigationTab) => void;
@@ -37,7 +36,8 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
   const [speakersCount, setSpeakersCount] = useState<number | null>(null);
   const [devicesCount, setDevicesCount] = useState<number | null>(null);
   const [activeDevicesCount, setActiveDevicesCount] = useState<number | null>(null);
-  const [verificationMetrics, setVerificationMetrics] = useState<VerificationMetricsResponse | null>(null);
+  const [apiHealth, setApiHealth] = useState<HealthApiResponse | null>(null);
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [statusCode, setStatusCode] = useState<number | null>(null);
@@ -64,19 +64,27 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
       if (isAdmin) {
         // Administrator Telemetry Loading
         try {
-          const [speakersRes, devicesRes, metricsRes] = await Promise.all([
+          const [speakersRes, devicesRes, healthRes] = await Promise.all([
             apiClient.getSpeakers(),
             apiClient.getDevices(),
-            apiClient.getVerificationMetrics(),
+            apiClient.getHealth(),
           ]);
 
           if (ignore) return;
 
-          // Check for 401 Unauthorized across any endpoint
+          // Track backend gateway connectivity
+          if (healthRes.ok && healthRes.data) {
+            setApiHealth(healthRes.data);
+            setApiOnline(healthRes.data.status === 'online');
+          } else {
+            setApiHealth(null);
+            setApiOnline(false);
+          }
+
+          // Check for 401 Unauthorized across protected endpoints
           if (
             speakersRes.status === 401 ||
-            devicesRes.status === 401 ||
-            metricsRes.status === 401
+            devicesRes.status === 401
           ) {
             setStatusCode(401);
             setError(
@@ -85,15 +93,13 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             setSpeakersCount(null);
             setDevicesCount(null);
             setActiveDevicesCount(null);
-            setVerificationMetrics(null);
             return;
           }
 
-          // Check for 403 Forbidden across any endpoint
+          // Check for 403 Forbidden across protected endpoints
           if (
             speakersRes.status === 403 ||
-            devicesRes.status === 403 ||
-            metricsRes.status === 403
+            devicesRes.status === 403
           ) {
             setStatusCode(403);
             setError(
@@ -102,7 +108,6 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             setSpeakersCount(null);
             setDevicesCount(null);
             setActiveDevicesCount(null);
-            setVerificationMetrics(null);
             return;
           }
 
@@ -120,25 +125,18 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             setActiveDevicesCount(null);
           }
 
-          if (metricsRes.ok && metricsRes.data) {
-            setVerificationMetrics(metricsRes.data);
-          } else {
-            setVerificationMetrics(null);
-          }
-
-          if (!speakersRes.ok && !devicesRes.ok && !metricsRes.ok) {
-            setStatusCode(speakersRes.status || devicesRes.status || metricsRes.status);
+          if (!speakersRes.ok && !devicesRes.ok) {
+            setStatusCode(speakersRes.status || devicesRes.status);
             setError(
               speakersRes.error ||
                 devicesRes.error ||
-                metricsRes.error ||
                 'Failed to retrieve system metrics from the database backend.'
             );
-          } else if (!metricsRes.ok && (speakersRes.ok || devicesRes.ok)) {
+          } else if (!speakersRes.ok || !devicesRes.ok) {
             setError(
-              metricsRes.error || 'Verification telemetry endpoint returned an error.'
+              speakersRes.error || devicesRes.error || 'A system registry query returned an error.'
             );
-            setStatusCode(metricsRes.status);
+            setStatusCode(speakersRes.status || devicesRes.status);
           }
         } catch {
           if (!ignore) {
@@ -147,7 +145,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
             setSpeakersCount(null);
             setDevicesCount(null);
             setActiveDevicesCount(null);
-            setVerificationMetrics(null);
+            setApiOnline(false);
           }
         } finally {
           if (!ignore) {
@@ -214,25 +212,36 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
     return `${activeDevicesCount ?? 0} online of ${devicesCount} registered units`;
   };
 
-  const getSuccessRateValue = () => {
-    if (isLoading) return '—';
-    if (verificationMetrics !== null) {
-      return `${verificationMetrics.success_rate.toFixed(1)}%`;
+  const getApiSubtitle = () => {
+    if (isLoading) return 'Probing gateway health...';
+    if (apiOnline) {
+      const ver = apiHealth?.version ? `v${apiHealth.version}` : '1.0.0';
+      return `FastAPI ${ver} container gateway responsive`;
     }
-    return '—';
+    if (apiOnline === false) return 'Gateway probe unreachable or returned error';
+    return 'Gateway probe pending';
   };
 
-  const getSuccessRateSubtitle = () => {
-    if (isLoading) return 'Querying verification telemetry...';
-    if (statusCode === 401) return 'Session unauthenticated';
-    if (statusCode === 403) return 'Admin authorization required';
-    if (verificationMetrics === null) return 'Telemetry unavailable';
-    if (verificationMetrics.total === 0) return '0 attempts recorded (Journal empty)';
-    const evaluated =
-      verificationMetrics.verified +
-      verificationMetrics.rejected +
-      verificationMetrics.challenge_failed;
-    return `${verificationMetrics.verified} verified of ${evaluated} evaluated attempts`;
+  const getDatabaseStatusValue = () => {
+    if (isLoading) return '—';
+    if (statusCode === 401) return 'Auth Required';
+    if (statusCode === 403) return 'Restricted';
+    if (speakersCount !== null && devicesCount !== null) return 'Operational';
+    if (speakersCount !== null || devicesCount !== null) return 'Degraded';
+    return 'Unavailable';
+  };
+
+  const getDatabaseStatusSubtitle = () => {
+    if (isLoading) return 'Verifying relational database queries...';
+    if (statusCode === 401) return 'Session unauthenticated (HTTP 401)';
+    if (statusCode === 403) return 'Admin authorization required (HTTP 403)';
+    if (speakersCount !== null && devicesCount !== null) {
+      return 'PostgreSQL connected; speaker & device registries verified';
+    }
+    if (speakersCount !== null || devicesCount !== null) {
+      return 'Partial registry response from database';
+    }
+    return 'Database queries failed or connection lost';
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -557,13 +566,6 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           >
             <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} /> Refresh
           </button>
-          <button
-            onClick={() => onNavigate('verification')}
-            className="btn btn-primary"
-            style={{ fontSize: '12px', padding: '6px 14px' }}
-          >
-            Launch Verification Simulator <ArrowRight size={14} />
-          </button>
         </div>
       </div>
 
@@ -629,7 +631,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* KPI Cards Grid */}
+      {/* Operational Indicators Grid */}
       <div className="operations-metrics">
         <StatCard
           title="Enrolled Biometric Profiles"
@@ -644,159 +646,17 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
           icon={<Cpu size={20} />}
         />
         <StatCard
-          title="Biometric Success Rate"
-          value={getSuccessRateValue()}
-          subtitle={getSuccessRateSubtitle()}
-          icon={<CheckCircle2 size={20} />}
-        />
-        <StatCard
-          title="Total Verification Attempts"
-          value={isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.total : '—'}
-          subtitle={
-            isLoading
-              ? 'Querying verification log...'
-              : verificationMetrics !== null
-              ? `${verificationMetrics.verified} verified, ${verificationMetrics.rejected} rejected`
-              : 'Audit log uninstrumented'
-          }
+          title="Backend API Service"
+          value={isLoading ? '—' : apiOnline ? 'Online' : apiOnline === false ? 'Offline' : '—'}
+          subtitle={getApiSubtitle()}
           icon={<Radio size={20} />}
         />
-      </div>
-
-      {/* Verification Telemetry Breakdown Card */}
-      <div className="card operations-panel operations-telemetry">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-          <div>
-            <h3 className="text-base font-semibold text-primary">Biometric Decision Telemetry</h3>
-            <p className="text-xs text-muted" style={{ marginTop: '2px' }}>
-              Persistent outcome categorization from VerificationEvent records
-            </p>
-          </div>
-          <span className="badge badge-active font-mono">
-            {verificationMetrics ? `${verificationMetrics.total} Total Attempts` : 'Live Telemetry'}
-          </span>
-        </div>
-
-        <div className="operations-outcomes">
-          {/* Verified */}
-          <div className="operation-outcome outcome-verified"
-            style={{
-              padding: '14px 16px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(16, 185, 129, 0.08)',
-              border: '1px solid rgba(16, 185, 129, 0.2)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <div className="text-xs font-semibold" style={{ color: '#34D399' }}>
-              Verified (Access Granted)
-            </div>
-            <div className="font-mono text-xl font-bold" style={{ color: '#10B981' }}>
-              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.verified : '—'}
-            </div>
-            <div className="text-xs text-secondary">
-              Biometric match &ge; threshold (0.25)
-            </div>
-          </div>
-
-          {/* Biometric Rejected */}
-          <div className="operation-outcome outcome-rejected"
-            style={{
-              padding: '14px 16px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(239, 68, 68, 0.08)',
-              border: '1px solid rgba(239, 68, 68, 0.2)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <div className="text-xs font-semibold" style={{ color: '#F87171' }}>
-              Biometric Rejected
-            </div>
-            <div className="font-mono text-xl font-bold" style={{ color: '#EF4444' }}>
-              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.rejected : '—'}
-            </div>
-            <div className="text-xs text-secondary">
-              Similarity below threshold (&lt; 0.25)
-            </div>
-          </div>
-
-          {/* Challenge Failed */}
-          <div className="operation-outcome outcome-challenge"
-            style={{
-              padding: '14px 16px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(245, 158, 11, 0.08)',
-              border: '1px solid rgba(245, 158, 11, 0.2)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <div className="text-xs font-semibold" style={{ color: '#FBBF24' }}>
-              Challenge Failed (Spoof / STT)
-            </div>
-            <div className="font-mono text-xl font-bold" style={{ color: '#F59E0B' }}>
-              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.challenge_failed : '—'}
-            </div>
-            <div className="text-xs text-secondary">
-              Liveness challenge digits unverified
-            </div>
-          </div>
-
-          {/* Processing Error */}
-          <div className="operation-outcome outcome-processing"
-            style={{
-              padding: '14px 16px',
-              borderRadius: 'var(--radius-sm)',
-              background: 'rgba(100, 116, 139, 0.08)',
-              border: '1px solid rgba(100, 116, 139, 0.2)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-            }}
-          >
-            <div className="text-xs font-semibold" style={{ color: '#94A3B8' }}>
-              Processing Errors
-            </div>
-            <div className="font-mono text-xl font-bold" style={{ color: '#CBD5E1' }}>
-              {isLoading ? '—' : verificationMetrics !== null ? verificationMetrics.error : '—'}
-            </div>
-            <div className="text-xs text-secondary">
-              Excluded from success-rate denominator
-            </div>
-          </div>
-        </div>
-
-        {/* Footer info note */}
-        <div
-          style={{
-            marginTop: '14px',
-            paddingTop: '12px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '8px',
-          }}
-        >
-          <div className="text-xs text-muted" style={{ lineHeight: '1.4' }}>
-            Success Rate Formula:{' '}
-            <span className="font-mono text-secondary">
-              verified / (verified + rejected + challenge_failed) &times; 100
-            </span>
-            . Processing errors represent audio decode or server faults and are excluded.
-          </div>
-          {verificationMetrics && (
-            <div className="text-xs font-mono text-secondary">
-              Computed Rate: {verificationMetrics.success_rate.toFixed(2)}%
-            </div>
-          )}
-        </div>
+        <StatCard
+          title="Database Registry Status"
+          value={getDatabaseStatusValue()}
+          subtitle={getDatabaseStatusSubtitle()}
+          icon={<Database size={20} />}
+        />
       </div>
 
       {/* Middle Split: Biometric Calibration & Security Alerts */}
@@ -980,13 +840,6 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({ onNavigate }) => {
               Biometric verification attempts are evaluated in real time by the SpeechBrain ECAPA-TDNN model and Vosk STT engine. Persistent verification audit logs will be provisioned in an upcoming milestone.
             </p>
           </div>
-          <button
-            onClick={() => onNavigate('verification')}
-            className="btn btn-primary"
-            style={{ fontSize: '12px', padding: '6px 14px', marginTop: '4px' }}
-          >
-            Launch Verification Simulator
-          </button>
         </div>
       </div>
     </div>

@@ -112,6 +112,41 @@ describe('Increment 3B: Overview Dashboard Backend Metrics Integration Suite', (
     }
   });
 
+  test('loads health and discovery metadata via apiClient.getHealth()', async () => {
+    const client = new ApiClient({
+      baseUrl: 'http://localhost:8000',
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      if (url === 'http://localhost:8000/') {
+        return new Response(
+          JSON.stringify({
+            status: 'online',
+            service: 'VoiceLock — Speaker Recognition API',
+            version: '1.0.0',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    try {
+      const healthRes = await client.getHealth();
+      assert.strictEqual(healthRes.ok, true);
+      assert.strictEqual(healthRes.status, 200);
+      assert.strictEqual(healthRes.data?.status, 'online');
+      assert.strictEqual(healthRes.data?.version, '1.0.0');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   // ─── 2. Data Minimization & Secret Exclusion ─────────────────────────────────
 
   test('verifies data minimization: device responses strictly exclude secret_hash and credentials', async () => {
@@ -682,40 +717,65 @@ describe('Increment 3C.5: Overview Dashboard Verification Metrics Integration Su
     }
   });
 
-  test('OverviewPage source integration: connects to real verification metrics and avoids mock metrics', () => {
+  test('OverviewPage source integration: displays operational status indicators and excludes misleading development statistics', () => {
     const overviewPath = path.resolve(__dirname, '../components/pages/OverviewPage.tsx');
     assert.strictEqual(fs.existsSync(overviewPath), true);
 
     const source = fs.readFileSync(overviewPath, 'utf-8');
 
-    // Asserts that apiClient.getVerificationMetrics() is queried
+    // Asserts that live operational health and registries are queried
     assert.ok(
-      source.includes('apiClient.getVerificationMetrics()'),
-      'OverviewPage must query apiClient.getVerificationMetrics()'
+      source.includes('apiClient.getSpeakers()') &&
+        source.includes('apiClient.getDevices()') &&
+        source.includes('apiClient.getHealth()'),
+      'OverviewPage must query real apiClient speakers, devices, and health endpoints'
     );
 
-    // Asserts that the 4 outcome categories are rendered
+    // Asserts that operational indicator cards are rendered
     assert.ok(
-      source.includes('Verified (Access Granted)'),
-      'OverviewPage must render verified outcome chip'
+      source.includes('title="Enrolled Biometric Profiles"'),
+      'OverviewPage must render Enrolled Biometric Profiles card'
     );
     assert.ok(
-      source.includes('Biometric Rejected'),
-      'OverviewPage must render biometric rejected outcome chip'
+      source.includes('title="Physical Access Terminals"'),
+      'OverviewPage must render Physical Access Terminals card'
     );
     assert.ok(
-      source.includes('Challenge Failed (Spoof / STT)'),
-      'OverviewPage must render challenge failed outcome chip'
+      source.includes('title="Backend API Service"'),
+      'OverviewPage must render Backend API Service card'
     );
     assert.ok(
-      source.includes('Processing Errors'),
-      'OverviewPage must render processing error outcome chip'
+      source.includes('title="Database Registry Status"'),
+      'OverviewPage must render Database Registry Status card'
     );
 
-    // Asserts that success rate formula is explicitly documented
-    assert.ok(
-      source.includes('verified / (verified + rejected + challenge_failed)'),
-      'OverviewPage must document success rate denominator excluding errors'
+    // Task 2 Invariant: Misleading dev statistics must NOT appear on System Overview
+    assert.strictEqual(
+      source.includes('title="Biometric Success Rate"'),
+      false,
+      'OverviewPage must not include Biometric Success Rate card'
+    );
+    assert.strictEqual(
+      source.includes('title="Total Verification Attempts"'),
+      false,
+      'OverviewPage must not include Total Verification Attempts card'
+    );
+    assert.strictEqual(
+      source.includes('Biometric Decision Telemetry'),
+      false,
+      'OverviewPage must not render aggregate development telemetry panel'
+    );
+    assert.strictEqual(
+      source.includes('Success Rate Formula:'),
+      false,
+      'OverviewPage must not render development success rate formula'
+    );
+
+    // Task 3 Invariant: Simulator actions must NOT appear on System Overview
+    assert.strictEqual(
+      source.includes('Launch Verification Simulator'),
+      false,
+      'OverviewPage must not contain Launch Verification Simulator action'
     );
 
     // Asserts that retry mechanism is present

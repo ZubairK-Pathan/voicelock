@@ -888,3 +888,27 @@
     justify-content: space-between !important;
   }
 }
+
+/* ─── Responsive Speaker Enrollment Modal (<400px / <480px) ─────────────────── */
+@media (max-width: 480px) {
+  .speaker-enrollment-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .speaker-sample-item {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .speaker-sample-controls {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+
+  .speaker-sample-controls audio {
+    max-width: calc(100% - 36px) !important;
+    flex: 1 !important;
+  }
+}

@@ -8,7 +8,9 @@
 
 import type {
   SpeakersApiResponse,
+  SpeakerEnrollmentResponse,
   DevicesApiResponse,
+  HealthApiResponse,
   VerificationMetricsResponse,
   ChallengeRequest,
   ChallengeApiResponse,
@@ -273,6 +275,21 @@ export class ApiClient {
 
   public getSpeakers(options?: RequestInit & { requiresAuth?: boolean }) {
     return this.get<SpeakersApiResponse>('/speakers', options);
+  }
+
+  public enrollSpeaker(
+    formData: FormData,
+    options?: RequestInit & { requiresAuth?: boolean }
+  ) {
+    return this.request<SpeakerEnrollmentResponse>('/speakers', {
+      ...options,
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  public getHealth(options?: RequestInit & { requiresAuth?: boolean }) {
+    return this.get<HealthApiResponse>('/', { ...options, requiresAuth: false });
   }
 
   public getDevices(options?: RequestInit & { requiresAuth?: boolean }) {
