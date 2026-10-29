@@ -29,10 +29,20 @@ def warmup_all_models() -> bool:
     print("[VoiceLock Build] SpeechBrain model initialized successfully.")
 
     print("[VoiceLock Build] Pre-warming Vosk STT liveness model...")
+    from vosk import Model
     vosk_path = _ensure_model()
     if not vosk_path or not Path(vosk_path).exists():
         raise RuntimeError("Failed to initialize Vosk STT model.")
-    print(f"[VoiceLock Build] Vosk STT model verified at {vosk_path}.")
+    
+    # Strictly instantiate the Vosk C++ Model to verify all weights and graphs are functional
+    try:
+        vosk_model = Model(str(vosk_path))
+        if vosk_model is None:
+            raise RuntimeError("Vosk Model returned None.")
+    except Exception as exc:
+        raise RuntimeError(f"Vosk Model initialization failed for path '{vosk_path}': {exc}") from exc
+
+    print(f"[VoiceLock Build] Vosk STT model verified and instantiated successfully from {vosk_path}.")
 
     print("[VoiceLock Build] All production biometric and STT models ready.")
     return True

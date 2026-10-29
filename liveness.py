@@ -24,6 +24,7 @@ import enum
 import json
 import secrets
 import struct
+import shutil
 import threading
 import time
 import urllib.request
@@ -32,7 +33,7 @@ import zipfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 DIGIT_WORDS = {
     "0": ["zero", "oh", "o"],
@@ -59,26 +60,74 @@ MODEL_ZIP = Path(__file__).resolve().parent / ".model_cache" / "vosk-model-small
 _vosk_model = None
 
 
-def _ensure_model() -> Path:
-    """Download the Vosk small English model if not already present."""
-    if MODEL_DIR.exists():
-        return MODEL_DIR
+def is_valid_vosk_model_dir(path: Optional[Union[Path, str]]) -> bool:
+    """Validate that path is a directory containing essential Vosk model files."""
+    if not path:
+        return False
+    p = Path(path)
+    if not p.is_dir():
+        return False
+    required_paths = [
+        p / "am" / "final.mdl",
+        p / "conf",
+        p / "graph",
+    ]
+    return all(req.exists() for req in required_paths)
 
-    MODEL_DIR.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading Vosk model (~40MB) to {MODEL_DIR.parent}...")
-    urllib.request.urlretrieve(MODEL_URL, MODEL_ZIP)
 
+def _ensure_model(target_dir: Optional[Union[Path, str]] = None, zip_url: Optional[str] = None) -> Path:
+    """Download and extract the Vosk small English model if not already present and valid."""
+    model_dir = Path(target_dir) if target_dir else MODEL_DIR
+    model_url = zip_url or MODEL_URL
+    model_zip = model_dir.parent / (model_dir.name + ".zip")
+
+    # 1. If model_dir exists and is valid, return immediately
+    if is_valid_vosk_model_dir(model_dir):
+        return model_dir
+
+    # 2. If model_dir exists but is invalid (e.g. file, empty dir, or missing weights), purge it safely
+    if model_dir.exists():
+        print(f"Existing model path {model_dir} is invalid or corrupted. Cleaning up...")
+        if model_dir.is_file():
+            model_dir.unlink(missing_ok=True)
+        elif model_dir.is_dir():
+            shutil.rmtree(model_dir, ignore_errors=True)
+
+    model_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # 3. Download model ZIP if not present or corrupt
+    if not model_zip.exists():
+        print(f"Downloading Vosk model (~40MB) to {model_dir.parent}...")
+        urllib.request.urlretrieve(model_url, model_zip)
+
+    # 4. Extract into parent directory
     print("Extracting...")
-    with zipfile.ZipFile(MODEL_ZIP, "r") as zf:
-        zf.extractall(MODEL_DIR.parent)
+    with zipfile.ZipFile(model_zip, "r") as zf:
+        zf.extractall(model_dir.parent)
 
-    extracted = list(MODEL_DIR.parent.glob("vosk-model-small-en-us*"))
-    if extracted and not MODEL_DIR.exists():
-        extracted[0].rename(MODEL_DIR)
+    # 5. Remove zip file immediately so it is never confused with extracted directories
+    model_zip.unlink(missing_ok=True)
 
-    MODEL_ZIP.unlink(missing_ok=True)
+    # 6. Locate extracted directories only (strictly excluding files)
+    extracted_dirs = [
+        p for p in model_dir.parent.glob("vosk-model-small-en-us*")
+        if p.is_dir() and p != model_dir
+    ]
+    if extracted_dirs and not model_dir.exists():
+        # Prefer candidate that satisfies is_valid_vosk_model_dir
+        valid_candidates = [p for p in extracted_dirs if is_valid_vosk_model_dir(p)]
+        chosen = valid_candidates[0] if valid_candidates else extracted_dirs[0]
+        shutil.move(str(chosen), str(model_dir))
+
+    # 7. Final sanity assertion
+    if not is_valid_vosk_model_dir(model_dir):
+        raise RuntimeError(
+            f"Vosk model directory '{model_dir}' is invalid or missing required model files "
+            "(am/final.mdl, conf, graph)."
+        )
+
     print("Vosk model ready.")
-    return MODEL_DIR
+    return model_dir
 
 
 def _get_model():
