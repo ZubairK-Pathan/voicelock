@@ -681,3 +681,148 @@ class TestFirmwareContract:
         assert parsed["zero_reads"] == 0
         assert parsed["last_read_bytes"] == 1024
 
+    def test_firmware_state_error_timeout_and_cancel_recovery(self):
+        """Verify firmware safely recovers from STATE_ERROR via bounded timer or CANCEL button."""
+        main_file = FIRMWARE_ROOT / "src" / "main.cpp"
+        assert main_file.is_file()
+        content = main_file.read_text(encoding="utf-8")
+
+        # 1. Bounded error recovery hold constant must be defined
+        assert "constexpr uint32_t ERROR_HOLD_MS" in content
+
+        # 2. captureStep must clean up state upon entering STATE_ERROR
+        capture_block = content.split("void captureStep()")[1].split("void transmitAudioPayload()")[0]
+        timeout_subblock = capture_block.split("if (millis() - stateEnteredAt > CAPTURE_TIMEOUT_MS)")[1].split("setState(STATE_ERROR);")[0]
+        assert "samplesCaptured = 0;" in timeout_subblock
+        assert "isVerificationFlow = false;" in timeout_subblock
+        assert "activeChallenge = {};" in timeout_subblock
+        assert "activeVerifyResult = {};" in timeout_subblock
+        assert "digitalWrite(LED_GREEN, LOW);" in timeout_subblock
+        assert "digitalWrite(LED_GREEN, HIGH);" not in timeout_subblock
+
+        # 3. cancelAction must accept STATE_ERROR and cleanly reset state
+        cancel_block = content.split("void cancelAction()")[1].split("void dispatchVerificationUpload()")[0]
+        assert "state == STATE_ERROR" in cancel_block
+        assert "samplesCaptured = 0;" in cancel_block
+        assert "isVerificationFlow = false;" in cancel_block
+        assert "activeChallenge = {};" in cancel_block
+        assert "activeVerifyResult = {};" in cancel_block
+        assert "digitalWrite(LED_GREEN, LOW);" in cancel_block
+        assert "digitalWrite(LED_GREEN, HIGH);" not in cancel_block
+        assert "setState(STATE_CANCELLED);" in cancel_block
+
+        # 4. pollButtons must allow CANCEL button in STATE_ERROR
+        poll_block = content.split("void pollButtons()")[1].split("void setup()")[0]
+        assert "state == STATE_ERROR" in poll_block
+
+        # 5. loop() must handle case STATE_ERROR with bounded recovery to STATE_READY
+        loop_block = content.split("void loop()")[1]
+        assert "case STATE_ERROR:" in loop_block
+        error_case = loop_block.split("case STATE_ERROR:")[1].split("default:")[0]
+        assert "millis() - stateEnteredAt >= ERROR_HOLD_MS" in error_case
+        assert "digitalWrite(LED_GREEN, LOW);" in error_case
+        assert "digitalWrite(LED_GREEN, HIGH);" not in error_case
+        assert "setState(STATE_READY);" in error_case
+        assert 'Serial.print("READY\\n");' in error_case
+
+    def test_firmware_state_error_simulation_model(self):
+        """Simulate the firmware state machine error transitions and verify invariants."""
+        class MockTerminalStateMachine:
+            def __init__(self):
+                self.state = "STATE_READY"
+                self.green_led = False
+                self.red_led = False
+                self.samples_captured = 0
+                self.active_challenge = {"id": "test", "digits": ["1", "2", "3"]}
+                self.active_verify_result = {"is_unlock": True, "accepted": True}
+                self.is_verification_flow = True
+                self.error_hold_ms = 3000
+                self.capture_timeout_ms = 8000
+                self.state_entered_at = 0
+
+            def timeout_in_capture(self, current_time: int):
+                # Mirrors captureStep() timeout
+                if self.state == "STATE_RECORDING" and (current_time - self.state_entered_at > self.capture_timeout_ms):
+                    self.green_led = False
+                    self.red_led = True
+                    self.samples_captured = 0
+                    self.is_verification_flow = False
+                    self.active_challenge = {}
+                    self.active_verify_result = {}
+                    self.state = "STATE_ERROR"
+                    self.state_entered_at = current_time
+
+            def press_cancel(self, current_time: int):
+                # Mirrors cancelAction()
+                if self.state in {"STATE_RECORDING", "STATE_CHALLENGE_DISPLAY", "STATE_CHALLENGE_REQUESTING", "STATE_UPLOADING", "STATE_ERROR"}:
+                    self.green_led = False
+                    self.red_led = True
+                    self.samples_captured = 0
+                    self.is_verification_flow = False
+                    self.active_challenge = {}
+                    self.active_verify_result = {}
+                    self.state = "STATE_CANCELLED"
+                    self.state_entered_at = current_time
+
+            def step_loop(self, current_time: int):
+                # Mirrors loop()
+                if self.state == "STATE_ERROR":
+                    if current_time - self.state_entered_at >= self.error_hold_ms:
+                        self.green_led = False
+                        self.red_led = False
+                        self.samples_captured = 0
+                        self.is_verification_flow = False
+                        self.active_challenge = {}
+                        self.active_verify_result = {}
+                        self.state = "STATE_READY"
+                        self.state_entered_at = current_time
+                elif self.state == "STATE_CANCELLED":
+                    if current_time - self.state_entered_at >= 1500:
+                        self.green_led = False
+                        self.red_led = False
+                        self.state = "STATE_READY"
+                        self.state_entered_at = current_time
+
+        # Test Case 1: Automatic recovery after timeout
+        sm = MockTerminalStateMachine()
+        sm.state = "STATE_RECORDING"
+        sm.state_entered_at = 1000
+        sm.timeout_in_capture(current_time=9500)  # > 8000ms
+
+        assert sm.state == "STATE_ERROR"
+        assert sm.green_led is False
+        assert sm.red_led is True
+        assert sm.samples_captured == 0
+        assert sm.active_challenge == {}
+        assert sm.active_verify_result == {}
+        assert sm.is_verification_flow is False
+
+        # In progress before 3000ms: still in STATE_ERROR
+        sm.step_loop(current_time=11000)  # 1500ms into error hold
+        assert sm.state == "STATE_ERROR"
+        assert sm.green_led is False
+
+        # After 3000ms error hold: automatically returns to STATE_READY
+        sm.step_loop(current_time=12600)  # 3100ms elapsed
+        assert sm.state == "STATE_READY"
+        assert sm.green_led is False
+        assert sm.red_led is False
+
+        # Test Case 2: CANCEL recovery during STATE_ERROR
+        sm2 = MockTerminalStateMachine()
+        sm2.state = "STATE_RECORDING"
+        sm2.state_entered_at = 1000
+        sm2.timeout_in_capture(current_time=9500)
+        assert sm2.state == "STATE_ERROR"
+
+        # User presses CANCEL at 10500ms
+        sm2.press_cancel(current_time=10500)
+        assert sm2.state == "STATE_CANCELLED"
+        assert sm2.green_led is False
+        assert sm2.red_led is True
+
+        # Loop completes cancellation hold (1500ms)
+        sm2.step_loop(current_time=12100)
+        assert sm2.state == "STATE_READY"
+        assert sm2.green_led is False
+        assert sm2.red_led is False

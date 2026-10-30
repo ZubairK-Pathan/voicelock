@@ -32,6 +32,7 @@ constexpr uint32_t RECORD_SECONDS  = 5;
 constexpr size_t   TOTAL_SAMPLES   = SAMPLE_RATE * RECORD_SECONDS; // 80,000 samples
 constexpr size_t   PCM_BYTES       = TOTAL_SAMPLES * sizeof(int16_t); // 160,000 bytes
 constexpr uint32_t CAPTURE_TIMEOUT_MS = 8000;
+constexpr uint32_t ERROR_HOLD_MS       = 3000;
 
 // ==================== PERIPHERALS & BUFFERS ====================
 
@@ -523,10 +524,13 @@ void beginRecording(bool forVerification = false) {
 }
 
 void cancelAction() {
-    if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING) {
+    if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING || state == STATE_ERROR) {
         samplesCaptured = 0;
         captureZeroReads = 0;
         captureLastReadBytes = 0;
+        isVerificationFlow = false;
+        activeChallenge = {};
+        activeVerifyResult = {};
         digitalWrite(LED_GREEN, LOW);
         digitalWrite(LED_RED, HIGH);
         errorTone();
@@ -609,6 +613,12 @@ void captureStep() {
                       (unsigned int)captureZeroReads,
                       (unsigned int)captureLastReadBytes);
         Serial.flush();
+        samplesCaptured = 0;
+        captureZeroReads = 0;
+        captureLastReadBytes = 0;
+        isVerificationFlow = false;
+        activeChallenge = {};
+        activeVerifyResult = {};
         setState(STATE_ERROR);
         return;
     }
@@ -680,6 +690,14 @@ void transmitAudioPayload() {
 // ==================== CHALLENGE REQUEST FLOW ====================
 
 void startChallengeRequest() {
+    if (pcmBuffer == nullptr || !microphoneReady) {
+        showScreen("Mic Error", "Microphone offline", "Check hardware");
+        errorTone();
+        delay(1500);
+        setState(STATE_READY);
+        return;
+    }
+
     if (!isWifiConnected()) {
         showScreen("No Wi-Fi", "Wi-Fi is offline", "Cannot request API");
         errorTone();
@@ -775,7 +793,7 @@ void pollButtons() {
         previousCancel = cancelNow;
         if (cancelNow == LOW && (now - lastButtonChange >= DEBOUNCE_MS)) {
             lastButtonChange = now;
-            if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING) {
+            if (state == STATE_RECORDING || state == STATE_CHALLENGE_DISPLAY || state == STATE_CHALLENGE_REQUESTING || state == STATE_UPLOADING || state == STATE_ERROR) {
                 cancelAction();
             }
         }
@@ -938,6 +956,19 @@ void loop() {
             } else if (c == 'D' || c == 'd') {
                 runI2SDiagnostic(1000);
                 break;
+            } else if (c == 'X' || c == 'x') {
+                cancelAction();
+                break;
+            }
+        }
+    }
+
+    if (state == STATE_ERROR) {
+        while (Serial.available() > 0) {
+            char c = static_cast<char>(Serial.read());
+            if (c == 'X' || c == 'x') {
+                cancelAction();
+                break;
             }
         }
     }
@@ -976,6 +1007,22 @@ void loop() {
 
         case STATE_CANCELLED:
             if (millis() - stateEnteredAt >= 1500) {
+                digitalWrite(LED_GREEN, LOW);
+                digitalWrite(LED_RED, LOW);
+                setState(STATE_READY);
+                Serial.print("READY\n");
+                Serial.flush();
+            }
+            break;
+
+        case STATE_ERROR:
+            if (millis() - stateEnteredAt >= ERROR_HOLD_MS) {
+                samplesCaptured = 0;
+                captureZeroReads = 0;
+                captureLastReadBytes = 0;
+                isVerificationFlow = false;
+                activeChallenge = {};
+                activeVerifyResult = {};
                 digitalWrite(LED_GREEN, LOW);
                 digitalWrite(LED_RED, LOW);
                 setState(STATE_READY);
