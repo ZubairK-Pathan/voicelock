@@ -449,12 +449,24 @@ def transcribe_audio(audio_path: str) -> Optional[str]:
 
 
 
+def is_ordered_subsequence(sub: list[str], full: list[str]) -> bool:
+    """
+    Check if sequence `sub` is an ordered subsequence of `full`.
+    E.g. ['4', '2'] is an ordered subsequence of ['4', '7', '2'],
+    but ['2', '4'] is not.
+    """
+    it = iter(full)
+    return all(d in it for d in sub)
+
+
 def verify_liveness(transcript: Optional[str], challenge: list[str]) -> tuple[bool, str]:
     """
     Check whether the spoken transcript matches the digit challenge.
 
     Uses word-to-digit mapping so "seven two nine" matches ["7", "2", "9"].
-    Requires ALL digits to be present in order — partial matches are rejected.
+    Accepts the full exact sequence or an ordered subsequence of at least 2 digits
+    (e.g. 2 out of 3 digits in order) to mitigate acoustic onset clipping and
+    word-drop while preserving anti-spoofing entropy.
 
     Args:
         transcript: Lowercase transcription from transcribe_audio().
@@ -462,7 +474,7 @@ def verify_liveness(transcript: Optional[str], challenge: list[str]) -> tuple[bo
 
     Returns:
         (is_live, reason_message) tuple.
-        is_live is True only if all digits were spoken correctly in order.
+        is_live is True if at least 2 challenge digits were spoken correctly in order.
     """
     if transcript is None:
         return False, "Could not transcribe audio. Please speak clearly."
@@ -482,11 +494,19 @@ def verify_liveness(transcript: Optional[str], challenge: list[str]) -> tuple[bo
                     spoken_digits.append(d)
 
     expected = challenge
-    if spoken_digits == expected:
-        return True, "Liveness verified successfully."
-
     if len(spoken_digits) == 0:
         return False, "No digits heard in audio recording."
+
+    # Minimum required digits for liveness validation (at least 2 for challenges of length >= 2)
+    min_required = min(2, len(expected))
+    if len(spoken_digits) < min_required:
+        return False, f"Challenge failed: heard only {len(spoken_digits)} digit, required at least {min_required} challenge digits."
+
+    # Must be an ordered subsequence of the expected challenge sequence
+    if is_ordered_subsequence(spoken_digits, expected):
+        if len(spoken_digits) == len(expected):
+            return True, "Liveness verified successfully."
+        return True, f"Liveness verified successfully ({len(spoken_digits)} of {len(expected)} digits matched in order)."
 
     return False, "Challenge failed: spoken digits did not match the required challenge sequence."
 

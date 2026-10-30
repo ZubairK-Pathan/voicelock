@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 from liveness import (
     verify_liveness,
+    is_ordered_subsequence,
     generate_challenge,
     challenge_display,
     challenge_expected_words,
@@ -111,25 +112,91 @@ def test_verify_liveness_no_digits_heard():
     assert "no digits heard" in reason.lower()
 
 
-def test_verify_liveness_order_and_value_mismatch_fails_spoof_detection():
-    """Security invariant: out-of-order, incomplete, or incorrect digits must fail."""
+def test_is_ordered_subsequence_helper():
+    """Verify is_ordered_subsequence correctly detects sub-sequences and preserves order."""
+    assert is_ordered_subsequence(["7", "2", "9"], ["7", "2", "9"]) is True
+    assert is_ordered_subsequence(["7", "2"], ["7", "2", "9"]) is True
+    assert is_ordered_subsequence(["2", "9"], ["7", "2", "9"]) is True
+    assert is_ordered_subsequence(["7", "9"], ["7", "2", "9"]) is True
+
     # Out of order
-    passed, reason = verify_liveness("nine two seven", ["7", "2", "9"])
+    assert is_ordered_subsequence(["9", "7"], ["7", "2", "9"]) is False
+    assert is_ordered_subsequence(["2", "7"], ["7", "2", "9"]) is False
+
+    # Extra or non-matching digits
+    assert is_ordered_subsequence(["7", "2", "9", "4"], ["7", "2", "9"]) is False
+    assert is_ordered_subsequence(["7", "3"], ["7", "2", "9"]) is False
+
+
+def test_verify_liveness_two_of_three_ordered_subsequence_accepts():
+    """
+    Usability optimization: When Vosk STT drops one digit (e.g. onset clipping or quiet consonant),
+    verify_liveness accepts an ordered subsequence of at least 2 challenge digits while still
+    verifying speaker biometrics.
+    """
+    challenge = ["7", "2", "9"]
+
+    # First two digits (last digit dropped)
+    passed, reason = verify_liveness("seven two", challenge)
+    assert passed is True
+    assert "successfully" in reason.lower()
+    assert "2 of 3" in reason
+
+    # Last two digits (first digit clipped)
+    passed, reason = verify_liveness("two nine", challenge)
+    assert passed is True
+    assert "successfully" in reason.lower()
+    assert "2 of 3" in reason
+
+    # First and last digits (middle digit dropped)
+    passed, reason = verify_liveness("seven nine", challenge)
+    assert passed is True
+    assert "successfully" in reason.lower()
+    assert "2 of 3" in reason
+
+    # Phonetic homophones with 2 digits
+    passed, reason = verify_liveness("to nine", challenge)
+    assert passed is True
+    assert "successfully" in reason.lower()
+
+
+def test_verify_liveness_order_and_value_mismatch_fails_spoof_detection():
+    """Security invariant: out-of-order, incorrect, single-digit, or extra digits must fail."""
+    challenge = ["7", "2", "9"]
+
+    # Out of order 3 digits
+    passed, reason = verify_liveness("nine two seven", challenge)
     assert passed is False
     assert "challenge failed" in reason.lower()
 
-    # Wrong digits
-    passed, reason = verify_liveness("seven three nine", ["7", "2", "9"])
+    # Out of order 2 digits
+    passed, reason = verify_liveness("nine seven", challenge)
     assert passed is False
     assert "challenge failed" in reason.lower()
 
-    # Incomplete (2 out of 3)
-    passed, reason = verify_liveness("seven nine", ["7", "2", "9"])
+    # Out of order 2 digits (2 then 7)
+    passed, reason = verify_liveness("two seven", challenge)
     assert passed is False
     assert "challenge failed" in reason.lower()
+
+    # Wrong digits (3 digits)
+    passed, reason = verify_liveness("seven three nine", challenge)
+    assert passed is False
+    assert "challenge failed" in reason.lower()
+
+    # Wrong digits (2 digits)
+    passed, reason = verify_liveness("seven three", challenge)
+    assert passed is False
+    assert "challenge failed" in reason.lower()
+
+    # Single digit only (insufficient challenge entropy)
+    passed, reason = verify_liveness("seven", challenge)
+    assert passed is False
+    assert "challenge failed" in reason.lower()
+    assert "required at least 2" in reason.lower()
 
     # Extra digits
-    passed, reason = verify_liveness("seven two nine four", ["7", "2", "9"])
+    passed, reason = verify_liveness("seven two nine four", challenge)
     assert passed is False
     assert "challenge failed" in reason.lower()
 
