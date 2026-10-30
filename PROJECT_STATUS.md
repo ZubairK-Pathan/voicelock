@@ -1,9 +1,9 @@
 # Project Status — VoiceLock Enterprise
 
-**Last Updated:** October 28, 2026  
-**Current Milestone:** Hardware Terminal Phase — Milestone 3: End-to-End ESP32 Audio Verification & Access Grant (Completed)  
+**Last Updated:** October 30, 2026  
+**Current Milestone:** Backend Two-of-Three Liveness Deployment & Verification (Completed)  
 **Current Git State:** Branch `feature/enterprise-foundation`  
-**Application Run Status:** Fully Operational (`voicelock-api` on Azure Container Apps; production frontend on Azure Static Web Apps; 387 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
+**Application Run Status:** Fully Operational (`voicelock-api:225a6a1-liveness-2of3-amd64` on Azure Container Apps; production frontend on Azure Static Web Apps; 423 backend tests and 148 frontend tests passing; 0 lint errors; clean production build; zero secret leakage; clean working tree)
 
 ---
 
@@ -1024,14 +1024,33 @@ Milestone 3 establishes complete, secure, end-to-end hardware-to-cloud audio ver
   - Added 15 comprehensive automated tests covering query parameter formatting, omitted filters, Bearer auth, 401 recovery, 403 safety, 5xx handling, admin view guard, zero-mock invariant, date range validation, cursor pagination navigation, duplicate request prevention, safe field rendering, and metadata privacy.
   - Total frontend test suite expanded to 148 tests (all passing).
 
+### Increment 4G: Two-of-Three Liveness Policy & AMD64 Azure Deployment (Completed)
+- **Two-of-Three Digit Liveness Policy (`225a6a1`):**
+  - Updated `liveness.py` with `is_ordered_subsequence(recognized, challenge)`: accepts speech if Vosk recognizes any ordered subsequence of at least 2 challenge digits (e.g. for "709": "709", "70", "09", "79" pass; single digit, wrong digits, or out-of-order digits fail).
+  - Preserved fail-closed authentication: biometric speaker verification threshold (0.2500) and liveness policy remain completely decoupled. A matching speaker with failed liveness is denied; passing liveness with an impostor speaker is denied.
+  - Multi-sample speaker enrollment API (`POST /speakers`) strictly guarded by admin authentication.
+- **Remote AMD64 Container Build & Azure Deployment:**
+  - Built image remotely via Azure Container Registry Tasks (`az acr build --registry voicelockacr --image voicelock-api:225a6a1-liveness-2of3-amd64 .`) ensuring native `linux/amd64` architecture.
+  - ACR Image Digest: `sha256:3aec227d0bb6f765f546abff583b9cb9359d02cb278f778c965ba50473fe6154` (949 MB).
+  - Deployed to Azure Container App `voicelock-api` in `voicelock-rg`. Active revision `voicelock-api--latest` provisioned with health state `Healthy`, running 1 replica, serving 100% of production traffic.
+  - Previous production image `voicelockacr.azurecr.io/voicelock-api:ae85d0c-vosk-fixed` preserved intact for rollback safety.
+- **Production Smoke Tests & Verification:**
+  - Verified live endpoint `GET /` returns HTTP 200 OK.
+  - Verified live endpoint `GET /speakers` and `POST /speakers` return HTTP 401 Unauthorized without admin credentials.
+  - Verified live endpoint `POST /challenge` with Scheme A HMAC device authentication succeeds, returning 3 digits, challenge ID, and session ID.
+  - Verified live endpoint `POST /verify` fail-closed rejection on dummy audio (`accepted: False`, `action: "DENY"`, `liveness_passed: False`).
+  - Verified single-attempt invalidation ("burn-on-use"): immediate HTTP 400 rejection on attempt to reuse the consumed challenge.
+  - Added test suite `tests/test_two_of_three_liveness_policy.py` (9 tests covering 3-digit success, each 2-digit subsequence, 1-digit failure, out-of-order failure, incorrect digits failure, and speaker match decoupling).
+  - Full backend test suite passing (423/423 tests passed in 16.97s).
+
 ---
 
 ## 3. Verified Test Results
 | Test Target | Command Executed | Exit Code | Result Summary |
 | :--- | :--- | :--- | :--- |
-| **Firmware Contract & E2E Suite (M3)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **13/13 tests PASSED in 2.11s** (WAV header exact byte structure, 16kHz mono 16-bit PCM decodability, Scheme A multipart construction, raw wire SHA-256 digest equality, valid backend UNLOCK decision, explicit biometric DENY decision, failed liveness challenge rejection, expired challenge 400 rejection, firmware parsing decision logic, 401 tampered body/signature rejection, SNTP clock drift rejection, Root CA verification, state machine green LED isolation) |
-| **ESP32-S3 Firmware Compilation (M3)** | `pio run -d firmware` | 0 | **Build SUCCESS in 1.26s** (RAM: 15.7% [51.4 KB / 327.7 KB], Flash: 37.5% [1.25 MB / 3.34 MB]) |
-| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **387/387 tests PASSED in 16.89s** (All baseline, security, device provisioning, verification route audit, and firmware contract test suites passing) |
+| **Two-of-Three Liveness Policy Suite** | `.venv/bin/pytest tests/test_two_of_three_liveness_policy.py -v` | 0 | **9/9 tests PASSED in 2.24s** (Valid 3-digit, valid 2-digit subsequences [70, 09, 79], 1-digit rejection, incorrect digit rejection, out-of-order rejection, failed speaker verification denial, liveness failure override prevention, replay burn-on-use, fail-closed guarantee) |
+| **Full Backend Test Suite** | `.venv/bin/pytest -q` | 0 | **423/423 tests PASSED in 16.97s** (All baseline, security, device provisioning, verification route audit, two-of-three liveness, and firmware contract test suites passing) |
+| **Firmware Contract & E2E Suite (M3)** | `.venv/bin/pytest tests/test_firmware_contract.py -v` | 0 | **16/16 tests PASSED in 1.61s** (WAV header exact byte structure, 16kHz mono 16-bit PCM decodability, Scheme A multipart construction, raw wire SHA-256 digest equality, valid backend UNLOCK decision, explicit biometric DENY decision, failed liveness challenge rejection, expired challenge 400 rejection, firmware parsing decision logic, 401 tampered body/signature rejection, SNTP clock drift rejection, Root CA verification, state machine green LED isolation, timeout and cancel recovery) |
 | **Device Integration Suite (M1)** | `.venv/bin/pytest tests/test_device_integration.py -v` | 0 | **6/6 tests PASSED in 3.12s** (Full end-to-end simulated verification flow, Scheme A HMAC canonical signing, Scheme B pre-shared key, challenge acquisition, spoken WAV synthesis, STT liveness verification, ECAPA-TDNN scoring) |
 | **Device Provisioning CLI Suite (M1)** | `.venv/bin/pytest tests/test_device_provisioning.py -v` | 0 | **10/10 tests PASSED in 0.95s** (CSPRNG secret generation, sha256$ salted verifiers, remote database protection, credentials.h C/C++ export with 0600 permissions, key rotation) |
 | **Frontend Security Audit Suite (Inc 4B)** | `npm test --prefix frontend` (including `securityAuditEvents.test.ts`) | 0 | **15/15 tests PASSED** (API query formatting, unset filter omission, Bearer auth, 401 recovery, 403 rejection, 5xx safety, admin guard, zero-mock invariant, date range validation, cursor pagination stack, duplicate prevention, safe fields & metadata privacy) |

@@ -51,6 +51,10 @@ __pycache__/
 # Frontend source (Deployed separately to Azure Static Web Apps)
 frontend/
 
+# Hardware Firmware & Device Configuration (Compiled/flashed locally via PlatformIO)
+firmware/
+device_config*.h
+
 # Developer tooling & OS metadata
 .gemini/
 .neon
